@@ -2,7 +2,7 @@ CC ?= gcc
 PKG_CONFIG ?= pkg-config
 
 CFLAGS += -Wall -Wextra -O2 $(shell $(PKG_CONFIG) --cflags gtk+-2.0 cairo)
-LDLIBS += $(shell $(PKG_CONFIG) --libs gtk+-2.0 cairo) -lm
+LDLIBS += $(shell $(PKG_CONFIG) --libs gtk+-2.0 cairo x11) -lm
 
 OBJS = main.o xiangqi_engine.o pikafish_uci.o touch_input.o
 TEST_OBJS = smoke_test.o xiangqi_engine.o

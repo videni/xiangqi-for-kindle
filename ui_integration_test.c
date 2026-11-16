@@ -140,6 +140,12 @@ static gboolean exercise_ui(gpointer unused) {
         assert(fire_radical[0] < 30 && fire_radical[1] < 30 && fire_radical[2] < 30);
     }
     capture("board.png");
+    {
+        gchar *activate[] = { "./ui-test", "--activate", NULL };
+        int status;
+        assert(g_spawn_sync(NULL, activate, NULL, 0, NULL, NULL, NULL, NULL, &status, NULL));
+        assert(status == 0 && app.game.history_len == 0);
+    }
     widget_button_event(app.status_panel, GDK_BUTTON_PRESS, 500, 28);
     widget_button_event(app.status_panel, GDK_BUTTON_RELEASE, 500, 28);
     assert(gtk_widget_get_visible(app.menu_panel));
@@ -338,6 +344,8 @@ static gboolean check_failed_resume(gpointer unused) {
 }
 
 int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--activate") == 0)
+        return chess_application_main(argc, argv);
     char *directory = g_dir_make_tmp("chess-ui-native-XXXXXX", NULL);
     char *command = g_build_filename(directory, "lipc-set-prop", NULL);
     char *path = g_strconcat(directory, ":", g_getenv("PATH"), NULL);

@@ -8,6 +8,7 @@
 
 #include <gtk/gtk.h>
 #include <gdk/gdkkeysyms.h>
+#include <gdk/gdkx.h>
 #include <cairo.h>
 #include <math.h>
 #include <stdio.h>
@@ -1172,12 +1173,40 @@ static gboolean prepare_data_paths(void) {
     return TRUE;
 }
 
+static gboolean activate_existing_window(void) {
+    Display *display = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
+    Window root, parent, *windows = NULL;
+    unsigned int count = 0, i;
+    gboolean activated = FALSE;
+    gdk_error_trap_push();
+    if (XQueryTree(display, DefaultRootWindow(display), &root, &parent, &windows, &count)) {
+        for (i = 0; i < count; i++) {
+            char *title = NULL;
+            if (XFetchName(display, windows[i], &title)) {
+                if (title && strstr(title, "ID:exactchinesechess_") != NULL) {
+                    XMapRaised(display, windows[i]);
+                    XSetInputFocus(display, windows[i], RevertToParent, CurrentTime);
+                    activated = TRUE;
+                }
+                XFree(title);
+            }
+            if (activated) break;
+        }
+    }
+    if (windows) XFree(windows);
+    XSync(display, False);
+    if (gdk_error_trap_pop() != 0) activated = FALSE;
+    return activated;
+}
+
 int main(int argc, char **argv) {
     GtkWidget *body, *row, *handle, *button;
     const char *modes[] = { "我执红", "我执黑", "双人对弈" };
     const char *levels[] = { "简单", "中等", "困难" };
 
     gtk_init(&argc, &argv);
+    if (argc > 1 && strcmp(argv[1], "--activate") == 0)
+        return activate_existing_window() ? 0 : 1;
     if (!prepare_data_paths()) return 1;
     app_install_kindle_style();
     app.mode = MODE_PLAY_RED;

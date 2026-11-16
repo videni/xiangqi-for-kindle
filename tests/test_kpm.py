@@ -4,7 +4,6 @@ from pathlib import Path
 import subprocess
 import shutil
 import signal
-import struct
 import tempfile
 import time
 import unittest
@@ -33,27 +32,37 @@ class KpmHooksTests(unittest.TestCase):
 
     def test_install_places_runnable_library_entry(self):
         self.hook("install.sh")
-        entry = self.documents / "xiangqi.sh"
+        entry = self.documents / "chinese-chess.sh"
         self.assertTrue(os.access(entry, os.X_OK))
         self.assertEqual(entry.read_bytes(), (ROOT / "kpm/scriptlets/xiangqi.sh").read_bytes())
 
-    def test_installed_entry_embeds_matching_png_cover_in_first_six_lines(self):
+    def test_installed_entry_embeds_matching_jpeg_cover_in_first_six_lines(self):
         self.hook("install.sh")
-        lines = (self.documents / "xiangqi.sh").read_text().splitlines()
+        lines = (self.documents / "chinese-chess.sh").read_text().splitlines()
         header = lines[:6]
         icons = [line for line in header if line.startswith("# Icon: ")]
         self.assertEqual(len(icons), 1, "Scriptlet parser only reads its first six lines")
-        prefix = "# Icon: data:image/png;base64,"
+        prefix = "# Icon: data:image/jpeg;base64,"
         self.assertTrue(icons[0].startswith(prefix))
         cover = base64.b64decode(icons[0][len(prefix):], validate=True)
-        self.assertEqual(cover, (ROOT / "assets/branding/kindle-cover-thumbnail.png").read_bytes())
-        self.assertEqual(cover[:8], b"\x89PNG\r\n\x1a\n")
-        self.assertEqual(cover[8:16], b"\x00\x00\x00\rIHDR")
-        self.assertEqual(struct.unpack(">II", cover[16:24]), (256, 384))
+        self.assertEqual(cover, (ROOT / "assets/branding/kindle-cover-thumbnail.jpeg").read_bytes())
+        self.assertTrue(cover.startswith(b"\xff\xd8") and cover.endswith(b"\xff\xd9"))
         self.assertEqual(header[0], "#!/bin/sh")
         self.assertIn("# Name: 象棋", header)
         self.assertIn("# Package: exactchinesechess", header)
         self.assertIn("# DontUseFBInk", header)
+
+    def test_install_migrates_only_an_owned_legacy_entry(self):
+        self.documents.mkdir()
+        legacy = self.documents / "xiangqi.sh"
+        legacy.write_bytes((ROOT / "kpm/scriptlets/xiangqi.sh").read_bytes())
+        self.hook("install.sh")
+        self.assertFalse(legacy.exists())
+        self.assertTrue((self.documents / "chinese-chess.sh").exists())
+        legacy.write_text("user script")
+        self.hook("install.sh")
+        self.hook("uninstall.sh")
+        self.assertEqual(legacy.read_text(), "user script")
 
     def test_upgrade_keeps_saved_game(self):
         self.hook("install.sh")
@@ -68,24 +77,78 @@ class KpmHooksTests(unittest.TestCase):
         save = self.data / "game.save"
         save.write_text("keep")
         self.hook("uninstall.sh")
-        self.assertFalse((self.documents / "xiangqi.sh").exists())
+        self.assertFalse((self.documents / "chinese-chess.sh").exists())
         self.assertEqual(save.read_text(), "keep")
 
     def test_user_changed_entry_is_neither_overwritten_nor_deleted(self):
         self.hook("install.sh")
-        entry = self.documents / "xiangqi.sh"
+        entry = self.documents / "chinese-chess.sh"
         entry.write_text("user script")
         self.hook("uninstall.sh")
         self.assertEqual(entry.read_text(), "user script")
         self.hook("install.sh", success=False)
         self.assertEqual(entry.read_text(), "user script")
 
+    def test_existing_process_exit_starts_replacement(self):
+        package = self.root / "package"
+        shutil.copytree(ROOT / "kpm", package)
+        binary = package / "payload/bin/armhf/exact-chinesechess"
+        binary.parent.mkdir(parents=True)
+        binary.write_text('''#!/usr/bin/env python3
+import os, sys, time
+from pathlib import Path
+data = Path(os.environ["EXACT_CHINESECHESS_DATA_DIR"])
+if "--activate" in sys.argv:
+    (data / "activation-failed").touch()
+    sys.exit(1)
+marker = data / "starts"
+replacement = marker.exists()
+with marker.open("a") as output:
+    output.write("replacement\\n" if replacement else "first\\n")
+time.sleep(0.4)
+''')
+        binary.chmod(0o755)
+        first = subprocess.Popen(["sh", str(package / "launch.sh")], env=self.env)
+        second = None
+        try:
+            marker = self.data / "starts"
+            deadline = time.monotonic() + 3
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(marker.exists())
+            second = subprocess.Popen(["sh", str(package / "launch.sh")], env=self.env)
+            self.assertEqual(first.wait(timeout=3), 0)
+            self.assertEqual(second.wait(timeout=4), 0)
+            self.assertTrue((self.data / "activation-failed").exists())
+            self.assertEqual(marker.read_text(), "first\nreplacement\n")
+        finally:
+            for child in [first, second]:
+                if child is not None:
+                    if child.poll() is None:
+                        child.terminate()
+                    child.wait(timeout=2)
+
     def test_repeated_launch_keeps_one_running_game(self):
         package = self.root / "package"
         shutil.copytree(ROOT / "kpm", package)
         binary = package / "payload/bin/armhf/exact-chinesechess"
         binary.parent.mkdir(parents=True)
-        binary.write_text('#!/bin/sh\nprintf "started\\n" >> "$EXACT_CHINESECHESS_DATA_DIR/starts"\nsleep 10\n')
+        binary.write_text('''#!/usr/bin/env python3
+import os, sys, time
+from pathlib import Path
+data = Path(os.environ["EXACT_CHINESECHESS_DATA_DIR"])
+if "--activate" in sys.argv:
+    attempts = data / "activation-attempts"
+    count = int(attempts.read_text()) if attempts.exists() else 0
+    attempts.write_text(str(count + 1))
+    if count == 0:
+        sys.exit(1)  # The first process exists before its window is ready.
+    (data / "activated").touch()
+    sys.exit(0)
+with (data / "starts").open("a") as output:
+    output.write("started\\n")
+time.sleep(10)
+''')
         binary.chmod(0o755)
         children = []
         try:
@@ -100,18 +163,22 @@ class KpmHooksTests(unittest.TestCase):
             second = subprocess.Popen(["sh", str(package / "launch.sh")], env=self.env,
                                       start_new_session=True)
             children.append(second)
-            try:
-                self.assertEqual(second.wait(timeout=1), 0)
-            except subprocess.TimeoutExpired:
-                self.fail("Second launch started another game instead of returning")
+            activated = self.data / "activated"
+            deadline = time.monotonic() + 3
+            while not activated.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(activated.exists(), "Repeated launch must reactivate the game")
+            self.assertGreaterEqual(int((self.data / "activation-attempts").read_text()), 2)
+            self.assertIsNone(second.poll(), "Keep the scriptlet open while the game runs")
             self.assertEqual(marker.read_text(), "started\n")
+            first.terminate()
+            first.wait(timeout=2)
+            self.assertEqual(second.wait(timeout=3), 0)
         finally:
             for child in children:
-                try:
-                    os.killpg(child.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                child.wait()
+                if child.poll() is None:
+                    child.terminate()
+                child.wait(timeout=2)
 
 
 if __name__ == "__main__":

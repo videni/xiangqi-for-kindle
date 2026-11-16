@@ -1,8 +1,9 @@
 # Kindle 书库封面
 
 - `kindle-cover.png`：内置 imagegen 生成的原图，1024×1536。
-- `kindle-cover-thumbnail.png`：用于书库的 256×384 PNG，由原图等比缩放。
-- 缩略图完整内嵌在 `kpm/scriptlets/xiangqi.sh` 的 `# Icon:` 中；专项测试校验两者一致。
+- `kindle-cover-thumbnail.png`：由原图等比缩放的 256×384 PNG，保留为缩略图原素材。
+- `kindle-cover-thumbnail.jpeg`：Kindle 入口使用的 256×384 JPEG 缩略图，由缩略图 PNG 以质量 95 转换，未改变内容和尺寸。
+- JPEG 缩略图完整内嵌在 `kpm/scriptlets/xiangqi.sh` 的 `# Icon:` 中；SH Integration 将其提取为 `icon.jpeg`。这次格式兼容实验同时更换缩略图 URI，需通过目录提交日志和设备首页实图验证，尚未确认缓存根因。
 
 生成提示词：
 

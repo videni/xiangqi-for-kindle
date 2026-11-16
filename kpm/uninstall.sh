@@ -2,7 +2,7 @@
 set -eu
 PACKAGE_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 DOCUMENTS="${EXACT_CHINESECHESS_DOCUMENTS_DIR:-/mnt/us/documents}"
-ENTRY="$DOCUMENTS/xiangqi.sh"
+ENTRY="$DOCUMENTS/chinese-chess.sh"
 if [ -f "$ENTRY" ] && cmp -s "$ENTRY" "$PACKAGE_ROOT/scriptlets/xiangqi.sh"; then
     rm "$ENTRY"
 fi

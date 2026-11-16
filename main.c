@@ -78,6 +78,19 @@ static void clear_assets(void);
 static gboolean board_expose(GtkWidget *widget, GdkEventExpose *event, gpointer data);
 static gboolean board_button(GtkWidget *widget, GdkEventButton *event, gpointer data);
 static void position_overlays(void);
+static void canvas_size_allocate(GtkWidget *widget, GtkAllocation *size);
+
+typedef struct { GtkFixed parent; } ChessCanvas;
+typedef struct { GtkFixedClass parent_class; } ChessCanvasClass;
+G_DEFINE_TYPE(ChessCanvas, chess_canvas, GTK_TYPE_FIXED)
+
+static void chess_canvas_class_init(ChessCanvasClass *klass) {
+    GTK_WIDGET_CLASS(klass)->size_allocate = canvas_size_allocate;
+}
+
+static void chess_canvas_init(ChessCanvas *canvas) {
+    (void)canvas;
+}
 
 static void menu_back_cb(GtkWidget *widget, gpointer data) {
     (void)widget;
@@ -1005,22 +1018,22 @@ static void update_ui(void) {
 }
 
 /* All overlays share the full-size board's parent; they never reserve board space. */
-static void canvas_size_allocate(GtkWidget *widget, GtkAllocation *size, gpointer data) {
-    GtkAllocation board = { 0, 0, size->width, size->height };
+static void canvas_size_allocate(GtkWidget *widget, GtkAllocation *size) {
+    GtkAllocation board = { size->x, size->y, size->width, size->height };
     GtkAllocation panel;
     GtkRequisition requested;
-    (void)widget;
-    (void)data;
+    /* Bypass GtkFixed's natural-size allocation: no intermediate corner frames. */
+    widget->allocation = *size;
+    if (!app.board || !app.menu_panel || !app.status_panel) return;
     gtk_widget_size_allocate(app.board, &board);
-    panel.x = 24;
+    panel.x = size->x + 24;
     panel.width = MAX(1, size->width - 48);
-    if (gtk_widget_get_visible(app.menu_panel)) {
-        gtk_widget_size_request(app.menu_panel, &requested);
-        panel.height = requested.height;
-        panel.y = MAX(24, size->height - panel.height - 24);
-        gtk_widget_size_allocate(app.menu_panel, &panel);
-    }
-    panel.y = 24;
+    /* Prepare hidden panels too, so their first mapped frame is already final. */
+    gtk_widget_size_request(app.menu_panel, &requested);
+    panel.height = requested.height;
+    panel.y = size->y + MAX(24, size->height - panel.height - 24);
+    gtk_widget_size_allocate(app.menu_panel, &panel);
+    panel.y = size->y + 24;
     panel.height = 56;
     gtk_widget_size_allocate(app.status_panel, &panel);
 }
@@ -1030,7 +1043,7 @@ static void position_overlays(void) {
     if (!app.canvas || !app.board || !app.menu_panel || !app.status_panel) return;
     gtk_widget_get_allocation(app.canvas, &size);
     if (size.width <= 1 || size.height <= 1) return;
-    canvas_size_allocate(app.canvas, &size, NULL);
+    canvas_size_allocate(app.canvas, &size);
 }
 
 static gboolean panel_expose(GtkWidget *widget, GdkEventExpose *event, gpointer data) {
@@ -1184,7 +1197,7 @@ int main(int argc, char **argv) {
     gtk_container_set_border_width(GTK_CONTAINER(app.window), 0);
     connect_touch(app.window);
     g_signal_connect(app.window, "delete-event", G_CALLBACK(quit_cb), NULL);
-    app.canvas = gtk_fixed_new();
+    app.canvas = g_object_new(chess_canvas_get_type(), NULL);
     gtk_container_add(GTK_CONTAINER(app.window), app.canvas);
     app.board = gtk_drawing_area_new();
     gtk_widget_set_size_request(app.board, 240, 240);
@@ -1241,7 +1254,6 @@ int main(int argc, char **argv) {
     gtk_fixed_put(GTK_FIXED(app.canvas), app.status_panel, 0, 0);
     connect_touch(app.status_panel);
     set_form_label_size(app.canvas, GINT_TO_POINTER(32));
-    g_signal_connect_after(app.canvas, "size-allocate", G_CALLBACK(canvas_size_allocate), NULL);
 
     app_log("starting exact-chinesechess");
     {

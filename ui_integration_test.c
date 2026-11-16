@@ -9,6 +9,30 @@ static gboolean exit_flow_completed;
 static gboolean finish_exit_test(gpointer unused);
 static GtkAllocation closed_board;
 
+static void assert_board_frame(GtkWidget *widget, GtkAllocation *frame, gpointer unused) {
+    (void)widget;
+    (void)unused;
+    if (frame->x != closed_board.x || frame->y != closed_board.y ||
+        frame->width != closed_board.width || frame->height != closed_board.height) {
+        g_printerr("Transient board allocation: %d,%d %dx%d\n",
+                   frame->x, frame->y, frame->width, frame->height);
+        assert(FALSE);
+    }
+}
+
+static void assert_menu_frame(GtkWidget *widget, GtkAllocation *frame, gpointer unused) {
+    GtkAllocation window;
+    (void)widget;
+    (void)unused;
+    gtk_widget_get_allocation(app.window, &window);
+    if (frame->x != 24 || frame->y + frame->height != window.height - 24 ||
+        frame->width != window.width - 48) {
+        g_printerr("Transient menu allocation: %d,%d %dx%d\n",
+                   frame->x, frame->y, frame->width, frame->height);
+        assert(FALSE);
+    }
+}
+
 static void assert_board_fixed(void) {
     GtkAllocation size;
     while (gtk_events_pending()) gtk_main_iteration();
@@ -100,6 +124,8 @@ static gboolean exercise_ui(gpointer unused) {
     assert(!gtk_widget_get_visible(app.menu_panel));
     gtk_widget_get_allocation(app.board, &size);
     closed_board = size;
+    g_signal_connect_after(app.board, "size-allocate", G_CALLBACK(assert_board_frame), NULL);
+    g_signal_connect_after(app.menu_panel, "size-allocate", G_CALLBACK(assert_menu_frame), NULL);
     g_print("Board allocation: %d x %d\n", size.width, size.height);
     assert(size.width >= 1000 && size.height >= 1250);
     assert(strcmp(gtk_label_get_text(GTK_LABEL(app.status)), "红方走棋") == 0);

@@ -7,6 +7,15 @@
 static char *system_menu_marker;
 static gboolean exit_flow_completed;
 static gboolean finish_exit_test(gpointer unused);
+static GtkAllocation closed_board;
+
+static void assert_board_fixed(void) {
+    GtkAllocation size;
+    while (gtk_events_pending()) gtk_main_iteration();
+    gtk_widget_get_allocation(app.board, &size);
+    assert(size.x == closed_board.x && size.y == closed_board.y);
+    assert(size.width == closed_board.width && size.height == closed_board.height);
+}
 
 static void widget_button_event(GtkWidget *widget, GdkEventType type, double x, double y) {
     GdkEvent *event = gdk_event_new(type);
@@ -14,7 +23,7 @@ static void widget_button_event(GtkWidget *widget, GdkEventType type, double x, 
     event->button.button = 1;
     event->button.x = x;
     event->button.y = y;
-    gtk_widget_event(widget, event);
+    gtk_propagate_event(widget, event);
     gdk_event_free(event);
 }
 
@@ -46,15 +55,58 @@ static void capture(const char *name) {
     g_object_unref(pixels);
 }
 
+static void assert_compact_menu(double closed_cell) {
+    const char *labels[] = { "新局", "悔棋", "退出" };
+    GtkAllocation panel_size, board_size, first_button;
+    GList *buttons, *item;
+    double left, top, cell;
+    int index = 0;
+    while (gtk_events_pending()) gtk_main_iteration();
+    assert(gtk_widget_get_visible(app.menu_panel));
+    assert(GTK_IS_HBOX(app.menu_actions));
+    buttons = gtk_container_get_children(GTK_CONTAINER(app.menu_actions));
+    assert(g_list_length(buttons) == 3);
+    for (item = buttons; item != NULL; item = item->next, index++) {
+        GtkWidget *button = GTK_WIDGET(item->data);
+        GtkAllocation size;
+        assert(GTK_IS_BUTTON(button) && gtk_widget_get_visible(button));
+        assert(strcmp(gtk_button_get_label(GTK_BUTTON(button)), labels[index]) == 0);
+        gtk_widget_get_allocation(button, &size);
+        assert(size.height >= 80);
+        if (index == 0) {
+            first_button = size;
+        } else {
+            assert(size.y == first_button.y && size.height == first_button.height);
+            /* GtkHBox assigns the integer division remainder to its final child. */
+            assert(size.width >= first_button.width - 2 && size.width <= first_button.width + 2);
+        }
+    }
+    g_list_free(buttons);
+    gtk_widget_get_allocation(app.menu_panel, &panel_size);
+    gtk_widget_get_allocation(app.board, &board_size);
+    g_print("Open menu allocation: %d px; board height: %d px\n", panel_size.height, board_size.height);
+    assert(panel_size.height > 80 && panel_size.height <= 160);
+    assert_board_fixed();
+    board_geometry(app.board, &left, &top, &cell);
+    assert(fabs(cell - closed_cell) < 0.01);
+}
+
 static gboolean exercise_ui(gpointer unused) {
     GtkAllocation size;
+    double closed_cell;
     AppMode previous_mode;
     char *previous_path;
     (void)unused;
     assert(!gtk_widget_get_visible(app.menu_panel));
     gtk_widget_get_allocation(app.board, &size);
+    closed_board = size;
     g_print("Board allocation: %d x %d\n", size.width, size.height);
     assert(size.width >= 1000 && size.height >= 1250);
+    assert(strcmp(gtk_label_get_text(GTK_LABEL(app.status)), "红方走棋") == 0);
+    {
+        double left, top;
+        board_geometry(app.board, &left, &top, &closed_cell);
+    }
     {
         GdkPixbuf *cannon = app.piece_images[XIANGQI_BLACK][XIANGQI_CANNON];
         const guchar *fire_radical = gdk_pixbuf_get_pixels(cannon) +
@@ -62,6 +114,11 @@ static gboolean exercise_ui(gpointer unused) {
         assert(fire_radical[0] < 30 && fire_radical[1] < 30 && fire_radical[2] < 30);
     }
     capture("board.png");
+    widget_button_event(app.status_panel, GDK_BUTTON_PRESS, 500, 28);
+    widget_button_event(app.status_panel, GDK_BUTTON_RELEASE, 500, 28);
+    assert(gtk_widget_get_visible(app.menu_panel));
+    assert_board_fixed();
+    hide_menu();
     widget_button_event(app.window, GDK_BUTTON_PRESS, 500, 12);
     widget_button_event(app.window, GDK_BUTTON_RELEASE, 500, 200);
     {
@@ -85,6 +142,12 @@ static gboolean exercise_ui(gpointer unused) {
             button_event(GDK_BUTTON_RELEASE, bottom_x[i], size.height - 8);
             assert(gtk_widget_get_visible(app.menu_panel));
             assert(app.game.history_len == 0 && app.game.selected_id == selected);
+            hide_menu();
+            while (gtk_events_pending()) gtk_main_iteration();
+            button_event(GDK_BUTTON_PRESS, bottom_x[i], 80);
+            button_event(GDK_BUTTON_RELEASE, bottom_x[i], 80);
+            assert(gtk_widget_get_visible(app.menu_panel));
+            assert_board_fixed();
             hide_menu();
             while (gtk_events_pending()) gtk_main_iteration();
         }
@@ -114,7 +177,12 @@ static gboolean exercise_ui(gpointer unused) {
     button_event(GDK_BUTTON_RELEASE, size.width / 2, size.height - 200);
     assert(gtk_widget_get_visible(app.menu_panel));
     assert(app.game.history_len == 0);
+    assert_compact_menu(closed_cell);
     capture("menu.png");
+    widget_button_event(app.menu_panel, GDK_BUTTON_PRESS, 8, 8);
+    widget_button_event(app.menu_panel, GDK_BUTTON_RELEASE, 8, 108);
+    assert(!gtk_widget_get_visible(app.menu_panel));
+    show_menu();
     tap_square(5, 0);
     assert(!gtk_widget_get_visible(app.menu_panel));
     assert(app.game.history_len == 0);
@@ -124,7 +192,10 @@ static gboolean exercise_ui(gpointer unused) {
     show_menu();
     previous_mode = app.mode;
     show_new_game_cb(NULL, NULL);
+    assert_board_fixed();
+    assert(!gtk_widget_get_visible(app.difficulty_panel));
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_PLAY_BLACK]), TRUE);
+    assert(gtk_widget_get_visible(app.difficulty_panel));
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.level_choices[XIANGQI_AI_EASY]), TRUE);
     {
         GtkWidget *label = gtk_bin_get_child(GTK_BIN(app.mode_choices[MODE_PLAY_BLACK]));
@@ -135,34 +206,44 @@ static gboolean exercise_ui(gpointer unused) {
         pango_layout_get_pixel_size(layout, &width, &height);
         assert(height <= 48 && width <= 200);
         assert(!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_TWO_PLAYER])));
+        assert(gtk_toggle_button_get_mode(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_PLAY_BLACK])));
+        assert(gtk_widget_get_style(app.mode_choices[MODE_PLAY_BLACK])->bg[GTK_STATE_ACTIVE].red == 65535);
     }
     capture("newgame.png");
     assert(app.mode == previous_mode && app.game.history_len == 1);
     menu_back_cb(NULL, NULL);
     assert(app.mode == previous_mode && app.game.history_len == 1);
-    show_history_cb(NULL, NULL);
-    history_first_cb(NULL, NULL);
-    assert(!is_viewing_latest());
+    assert_compact_menu(closed_cell);
     hide_menu();
-    assert(is_viewing_latest());
 
     assert(save_game());
     assert(g_file_test(app.save_path, G_FILE_TEST_IS_REGULAR));
     undo_cb(NULL, NULL);
     assert(app.game.history_len == 0);
-    load_cb(NULL, NULL);
+    assert(load_game());
     assert(app.game.history_len == 1);
     app.save_protected = TRUE;
-    load_cb(NULL, NULL);
+    assert(load_game());
     assert(!app.save_protected);
     {
         char *legacy;
         assert(g_file_get_contents(app.save_path, &legacy, NULL, NULL));
         *strstr(legacy, "settings") = '\0';
         assert(g_file_set_contents(app.save_path, legacy, -1, NULL));
-        g_free(legacy);
-        load_cb(NULL, NULL);
+        assert(load_game());
         assert(app.game.history_len == 1);
+        {
+            char *demo = g_strconcat(legacy, "settings 3 1\n", NULL);
+            assert(g_file_set_contents(app.save_path, demo, -1, NULL));
+            assert(load_game());
+            assert(app.mode == MODE_PLAY_RED && app.game.history_len == 1);
+            g_free(demo);
+            if (app.ai_source != 0) {
+                g_source_remove(app.ai_source);
+                app.ai_source = 0;
+            }
+        }
+        g_free(legacy);
     }
     app.game.game_over = true;
     app.game.winner = XIANGQI_RED;
@@ -194,9 +275,17 @@ static gboolean finish_exit_test(gpointer unused) {
     tap_square(5, 0);
     assert(app.game.history_len == 1);
     g_remove(app.save_path);
-    history_first_cb(NULL, NULL);
-    assert(!is_viewing_latest());
-    puts("UI passed: menus, settings, legacy save, failed exit kept alive, full game auto-save");
+    puts("UI passed: compact three-button menu, gestures, settings, legacy save, failed exit kept alive, full game auto-save");
+    quit_cb(NULL, NULL);
+    return FALSE;
+}
+
+static gboolean check_resume_message_expired(gpointer unused) {
+    (void)unused;
+    assert(app.message[0] == '\0');
+    assert(strcmp(gtk_label_get_text(GTK_LABEL(app.status)), "黑方走棋") == 0);
+    assert_board_fixed();
+    puts("Resume notice passed: success shown for two seconds, then current turn; board unchanged");
     quit_cb(NULL, NULL);
     return FALSE;
 }
@@ -205,9 +294,12 @@ static gboolean check_auto_resume(gpointer unused) {
     (void)unused;
     assert(app.game.history_len == 1);
     assert(app.mode == MODE_TWO_PLAYER && app.level == XIANGQI_AI_HARD);
-    assert(is_viewing_latest() && !gtk_widget_get_visible(app.menu_panel));
-    puts("Auto resume passed: history, playing side, difficulty, latest view");
-    quit_cb(NULL, NULL);
+    assert(!gtk_widget_get_visible(app.menu_panel));
+    assert(gtk_widget_get_visible(app.status));
+    assert(strcmp(gtk_label_get_text(GTK_LABEL(app.status)), "已恢复上次对局") == 0);
+    gtk_widget_get_allocation(app.board, &closed_board);
+    puts("Auto resume passed: history, playing side, difficulty");
+    g_timeout_add(2100, check_resume_message_expired, NULL);
     return FALSE;
 }
 

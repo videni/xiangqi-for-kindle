@@ -1030,29 +1030,53 @@ static gboolean board_tap(GtkWidget *widget, GdkEventButton *event) {
     return TRUE;
 }
 
+static void touch_coordinates(GtkWidget *widget, double x, double y, double *window_x, double *window_y) {
+    gint offset_x = 0, offset_y = 0;
+    gtk_widget_translate_coordinates(widget, app.window, 0, 0, &offset_x, &offset_y);
+    *window_x = x + offset_x;
+    *window_y = y + offset_y;
+}
+
+static void show_system_menu(void) {
+    gchar *argv[] = { "lipc-set-prop", "com.lab126.kppchromebar", "configurePillState", "openedBySwipe", NULL };
+    GError *error = NULL;
+    if (!g_spawn_async(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL, NULL, NULL, &error)) {
+        app_log(error->message);
+        g_error_free(error);
+        set_message("系统菜单打开失败");
+        update_ui();
+    }
+}
+
 static gboolean board_button(GtkWidget *widget, GdkEventButton *event, gpointer data) {
     GtkAllocation size;
+    double x, y;
     (void)data;
     if (event->button != 1) return FALSE;
-    gtk_widget_get_allocation(widget, &size);
-    touch_input_begin(&app.touch, event->x, event->y, size.height);
+    gtk_widget_get_allocation(app.window, &size);
+    touch_coordinates(widget, event->x, event->y, &x, &y);
+    touch_input_begin(&app.touch, x, y, size.height);
     return TRUE;
 }
 
 static gboolean board_motion(GtkWidget *widget, GdkEventMotion *event, gpointer data) {
-    (void)widget;
+    double x, y;
     (void)data;
-    touch_input_motion(&app.touch, event->x, event->y);
+    touch_coordinates(widget, event->x, event->y, &x, &y);
+    touch_input_motion(&app.touch, x, y);
     return TRUE;
 }
 
 static gboolean board_release(GtkWidget *widget, GdkEventButton *event, gpointer data) {
     gboolean open = gtk_widget_get_visible(app.menu_panel);
     TouchAction action;
+    double x, y;
     (void)data;
     if (event->button != 1) return FALSE;
-    action = touch_input_end(&app.touch, event->x, event->y, open);
-    if (action == TOUCH_OPEN_MENU) show_menu();
+    touch_coordinates(widget, event->x, event->y, &x, &y);
+    action = touch_input_end(&app.touch, x, y, open);
+    if (action == TOUCH_OPEN_SYSTEM_MENU) show_system_menu();
+    else if (action == TOUCH_OPEN_MENU) show_menu();
     else if (action == TOUCH_CLOSE_MENU || (action == TOUCH_TAP && open)) hide_menu();
     else if (action == TOUCH_TAP && widget == app.board) return board_tap(widget, event);
     return TRUE;
@@ -1209,6 +1233,7 @@ int main(int argc, char **argv) {
     gtk_window_set_title(GTK_WINDOW(app.window), kindle_window_title());
     gtk_window_set_default_size(GTK_WINDOW(app.window), KINDLE_APP_WIDTH, KINDLE_APP_HEIGHT);
     gtk_container_set_border_width(GTK_CONTAINER(app.window), 0);
+    connect_touch(app.window);
     g_signal_connect(app.window, "delete-event", G_CALLBACK(quit_cb), NULL);
     vbox = gtk_vbox_new(FALSE, 8);
     gtk_container_add(GTK_CONTAINER(app.window), vbox);

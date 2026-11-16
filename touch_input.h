@@ -1,7 +1,7 @@
 #ifndef TOUCH_INPUT_H
 #define TOUCH_INPUT_H
 
-typedef enum { TOUCH_NONE, TOUCH_TAP, TOUCH_OPEN_MENU, TOUCH_CLOSE_MENU } TouchAction;
+typedef enum { TOUCH_NONE, TOUCH_TAP, TOUCH_OPEN_MENU, TOUCH_CLOSE_MENU, TOUCH_OPEN_SYSTEM_MENU } TouchAction;
 
 typedef struct {
     double start_x, start_y;

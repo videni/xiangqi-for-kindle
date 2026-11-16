@@ -24,9 +24,9 @@
 
 - 点棋子，再点落点；抬手才处理点击。
 - 从屏幕底边约 120 像素内向上滑至少 96 像素，打开菜单。
+- 从屏幕顶部约 64 像素内向下滑至少 96 像素，打开 Kindle 原生快捷设置；平时保持全屏棋盘。
 - 下滑菜单顶部的收起区，或点棋盘，收起菜单；本次触摸不走棋。
 - 新局、悔棋、保存、载入、棋谱、退出都在菜单里。
-- 保留 Kindle 原生顶部栏，顶部下滑可打开系统快捷设置。
 - 新局设置点“开始新局”才生效；“返回”保留原局。
 - 执方／玩法与难度使用水平单选项，点选反白，不弹出下拉框。
 - 关闭棋谱后自动回到当前对局。
@@ -45,6 +45,8 @@
 ```text
 ;kpm uninstall exactchinesechess
 ```
+
+KPM 0.2.4 覆盖安装本地包若出现 `Could not resolve dependency graph`，先在象棋菜单保存，再用以上命令卸载应用，随后重新执行本地包安装命令。存档目录保留；该流程已在 PW4 验证。
 
 旧版存档仍可从 `/mnt/us/extensions/exact-chinesechess/exact-chinesechess.save` 或 `/mnt/us/documents/exact-chinesechess.txt` 载入。
 

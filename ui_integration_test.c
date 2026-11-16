@@ -2,15 +2,22 @@
 #include "main.c"
 #undef main
 #include <assert.h>
+#include <glib/gstdio.h>
 
-static void button_event(GdkEventType type, double x, double y) {
+static char *system_menu_marker;
+
+static void widget_button_event(GtkWidget *widget, GdkEventType type, double x, double y) {
     GdkEvent *event = gdk_event_new(type);
-    event->button.window = g_object_ref(gtk_widget_get_window(app.board));
+    event->button.window = g_object_ref(gtk_widget_get_window(widget));
     event->button.button = 1;
     event->button.x = x;
     event->button.y = y;
-    gtk_widget_event(app.board, event);
+    gtk_widget_event(widget, event);
     gdk_event_free(event);
+}
+
+static void button_event(GdkEventType type, double x, double y) {
+    widget_button_event(app.board, type, x, y);
 }
 
 static void tap_square(int row, int col) {
@@ -53,6 +60,15 @@ static gboolean exercise_ui(gpointer unused) {
         assert(fire_radical[0] < 30 && fire_radical[1] < 30 && fire_radical[2] < 30);
     }
     capture("board.png");
+    widget_button_event(app.window, GDK_BUTTON_PRESS, 500, 12);
+    widget_button_event(app.window, GDK_BUTTON_RELEASE, 500, 200);
+    {
+        gint64 deadline = g_get_monotonic_time() + 2000000;
+        while (!g_file_test(system_menu_marker, G_FILE_TEST_EXISTS) && g_get_monotonic_time() < deadline)
+            g_usleep(10000);
+        assert(g_file_test(system_menu_marker, G_FILE_TEST_EXISTS));
+        assert(!gtk_widget_get_visible(app.menu_panel) && app.game.history_len == 0);
+    }
     app.mode = MODE_TWO_PLAYER;
     new_game();
     tap_square(6, 0);
@@ -120,6 +136,23 @@ static gboolean exercise_ui(gpointer unused) {
 }
 
 int main(int argc, char **argv) {
+    char *directory = g_dir_make_tmp("chess-ui-native-XXXXXX", NULL);
+    char *command = g_build_filename(directory, "lipc-set-prop", NULL);
+    char *path = g_strconcat(directory, ":", g_getenv("PATH"), NULL);
+    int result;
+    system_menu_marker = g_build_filename(directory, "requested", NULL);
+    assert(g_file_set_contents(command, "#!/bin/sh\n: > \"$CHESS_TEST_SYSTEM_MENU_MARKER\"\n", -1, NULL));
+    assert(g_chmod(command, 0755) == 0);
+    g_setenv("PATH", path, TRUE);
+    g_setenv("CHESS_TEST_SYSTEM_MENU_MARKER", system_menu_marker, TRUE);
     g_timeout_add(300, exercise_ui, NULL);
-    return chess_application_main(argc, argv);
+    result = chess_application_main(argc, argv);
+    g_remove(system_menu_marker);
+    g_remove(command);
+    g_rmdir(directory);
+    g_free(system_menu_marker);
+    g_free(command);
+    g_free(path);
+    g_free(directory);
+    return result;
 }

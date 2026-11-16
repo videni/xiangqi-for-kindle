@@ -22,6 +22,8 @@ TouchAction touch_input_end(TouchInput *input, double x, double y, int menu_open
     touch_input_motion(input, x, y);
     input->pressed = 0;
     if (fabs(dy) >= 96 && fabs(dy) >= fabs(dx) * 1.5) {
+        if (input->start_y <= 64 && dy > 0)
+            return TOUCH_OPEN_SYSTEM_MENU;
         if (menu_open && dy > 0)
             return TOUCH_CLOSE_MENU;
         if (!menu_open && input->bottom_edge && dy < 0)

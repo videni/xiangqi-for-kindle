@@ -1,4 +1,4 @@
-# Exact Chinese Chess
+# Chinese Chess for Kindle
 
 ## PW4 focused UI / KPM adaptation
 

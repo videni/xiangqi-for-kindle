@@ -64,6 +64,7 @@ typedef struct {
     AppMode mode;
     XiangqiAiLevel level;
     gboolean pikafish_available;
+    gboolean save_protected;
     guint ai_source;
     int view_ply;
     char message[192];
@@ -457,6 +458,7 @@ static void new_game(void) {
         app.ai_source = 0;
     }
     xiangqi_init(&app.game);
+    app.save_protected = FALSE;
     pikafish_uci_start_game(&app.pikafish);
     set_latest_view();
     set_message("");
@@ -514,35 +516,40 @@ static void undo_cb(GtkWidget *widget, gpointer data) {
     }
 }
 
-static void save_cb(GtkWidget *widget, gpointer data) {
-    FILE *f;
+static gboolean save_game(void) {
+    GString *contents = g_string_new(NULL);
+    GError *error = NULL;
+    gboolean saved;
     int i;
-    (void)widget;
-    (void)data;
-
-    f = fopen(app.save_path, "w");
-    if (!f) {
-        set_message("保存失败，请检查存储空间");
-        update_ui();
-        return;
-    }
-    fprintf(f, "exact-chinesechess 1\n%d\n", app.game.history_len);
+    g_string_append_printf(contents, "exact-chinesechess 1\n%d\n", app.game.history_len);
     for (i = 0; i < app.game.history_len; i++) {
         XiangqiMove *m = &app.game.history[i];
-        fprintf(f, "%d %d\n", m->move_id, m->to_row * 9 + m->to_col);
+        g_string_append_printf(contents, "%d %d\n", m->move_id, m->to_row * 9 + m->to_col);
     }
-    fclose(f);
-    set_message("已保存");
+    g_string_append_printf(contents, "settings %d %d\n", app.mode, app.level);
+    saved = g_file_set_contents(app.save_path, contents->str, contents->len, &error);
+    g_string_free(contents, TRUE);
+    if (!saved) {
+        app_log(error->message);
+        g_error_free(error);
+        set_message("保存失败，请检查存储空间后重试退出");
+    } else {
+        set_message("已自动保存");
+    }
     update_ui();
+    return saved;
 }
 
-static void load_cb(GtkWidget *widget, gpointer data) {
+static gboolean load_game(void) {
     FILE *f;
     char header[64];
+    char footer[32];
+    XiangqiGame restored;
+    int version;
     int count;
     int i;
-    (void)widget;
-    (void)data;
+    int mode = app.mode;
+    int level = app.level;
 
     f = fopen(app.save_path, "r");
     if (f == NULL && strcmp(app.save_path, SAVE_PATH) != 0)
@@ -552,33 +559,57 @@ static void load_cb(GtkWidget *widget, gpointer data) {
     if (!f) {
         set_message("还没有存档");
         update_ui();
-        return;
+        return FALSE;
     }
-    if (fscanf(f, "%63s %*d\n%d\n", header, &count) != 2 || strcmp(header, "exact-chinesechess") != 0) {
+    if (fscanf(f, "%63s %d\n%d\n", header, &version, &count) != 3 ||
+        strcmp(header, "exact-chinesechess") != 0 || version != 1 ||
+        count < 0 || count > XIANGQI_MAX_HISTORY) {
         fclose(f);
         set_message("存档格式无效");
         update_ui();
-        return;
+        return FALSE;
     }
-    xiangqi_init(&app.game);
+    xiangqi_init(&restored);
     for (i = 0; i < count; i++) {
         int id;
         int square;
         XiangqiMove move;
         if (fscanf(f, "%d %d\n", &id, &square) != 2 ||
-            !xiangqi_apply_move(&app.game, id, square / 9, square % 9, &move)) {
+            !xiangqi_apply_move(&restored, id, square / 9, square % 9, &move)) {
             fclose(f);
             set_message("存档无法还原");
             update_ui();
-            return;
+            return FALSE;
+        }
+    }
+    if (fscanf(f, " %31s", footer) == 1 && strcmp(footer, "settings") == 0) {
+        if (fscanf(f, "%d %d", &mode, &level) != 2 ||
+            mode < MODE_PLAY_RED || mode > MODE_AI_DEMO ||
+            level < XIANGQI_AI_EASY || level > XIANGQI_AI_HARD) {
+            fclose(f);
+            set_message("存档设置无效");
+            update_ui();
+            return FALSE;
         }
     }
     fclose(f);
+    app.game = restored;
+    app.mode = (AppMode)mode;
+    app.level = (XiangqiAiLevel)level;
+    app.save_protected = FALSE;
+    pikafish_uci_set_difficulty(&app.pikafish, app.level);
     set_message("已载入");
     report_history_to_pikafish();
     set_latest_view();
     update_ui();
     maybe_schedule_ai();
+    return TRUE;
+}
+
+static void load_cb(GtkWidget *widget, gpointer data) {
+    (void)widget;
+    (void)data;
+    load_game();
 }
 
 static void history_first_cb(GtkWidget *widget, gpointer data) {
@@ -622,6 +653,7 @@ static void history_latest_cb(GtkWidget *widget, gpointer data) {
 static gboolean quit_cb(GtkWidget *widget, gpointer data) {
     (void)widget;
     (void)data;
+    if (!app.save_protected && !save_game()) return TRUE;
     gtk_main_quit();
     return TRUE;
 }
@@ -1176,11 +1208,6 @@ static void menu_undo_cb(GtkWidget *widget, gpointer data) {
     hide_menu();
 }
 
-static void menu_save_cb(GtkWidget *widget, gpointer data) {
-    save_cb(widget, data);
-    hide_menu();
-}
-
 static void menu_load_cb(GtkWidget *widget, gpointer data) {
     load_cb(widget, data);
     hide_menu();
@@ -1274,11 +1301,10 @@ int main(int argc, char **argv) {
     add_button(row, "悔棋", G_CALLBACK(menu_undo_cb));
     row = gtk_hbox_new(TRUE, 8);
     gtk_box_pack_start(GTK_BOX(app.menu_actions), row, FALSE, FALSE, 0);
-    add_button(row, "保存", G_CALLBACK(menu_save_cb));
     add_button(row, "载入", G_CALLBACK(menu_load_cb));
+    add_button(row, "棋谱", G_CALLBACK(show_history_cb));
     row = gtk_hbox_new(TRUE, 8);
     gtk_box_pack_start(GTK_BOX(app.menu_actions), row, FALSE, FALSE, 0);
-    add_button(row, "棋谱", G_CALLBACK(show_history_cb));
     add_button(row, "退出", G_CALLBACK(quit_cb));
 
     app.new_game_panel = gtk_vbox_new(FALSE, 12);
@@ -1331,6 +1357,13 @@ int main(int argc, char **argv) {
             app_log(error->message);
             g_error_free(error);
         }
+    }
+    if (g_file_test(app.save_path, G_FILE_TEST_IS_REGULAR) ||
+        g_file_test(SAVE_PATH, G_FILE_TEST_IS_REGULAR) ||
+        g_file_test(LEGACY_SAVE_PATH, G_FILE_TEST_IS_REGULAR)) {
+        app.save_protected = !load_game();
+        if (app.save_protected)
+            set_message("存档读取失败，原文件已保留；请开始新局");
     }
     update_ui();
     gtk_widget_show_all(app.menu_panel);

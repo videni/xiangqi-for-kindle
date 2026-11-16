@@ -1,8 +1,10 @@
+import base64
 import os
 from pathlib import Path
 import subprocess
 import shutil
 import signal
+import struct
 import tempfile
 import time
 import unittest
@@ -34,6 +36,24 @@ class KpmHooksTests(unittest.TestCase):
         entry = self.documents / "xiangqi.sh"
         self.assertTrue(os.access(entry, os.X_OK))
         self.assertEqual(entry.read_bytes(), (ROOT / "kpm/scriptlets/xiangqi.sh").read_bytes())
+
+    def test_installed_entry_embeds_matching_png_cover_in_first_six_lines(self):
+        self.hook("install.sh")
+        lines = (self.documents / "xiangqi.sh").read_text().splitlines()
+        header = lines[:6]
+        icons = [line for line in header if line.startswith("# Icon: ")]
+        self.assertEqual(len(icons), 1, "Scriptlet parser only reads its first six lines")
+        prefix = "# Icon: data:image/png;base64,"
+        self.assertTrue(icons[0].startswith(prefix))
+        cover = base64.b64decode(icons[0][len(prefix):], validate=True)
+        self.assertEqual(cover, (ROOT / "assets/branding/kindle-cover-thumbnail.png").read_bytes())
+        self.assertEqual(cover[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(cover[8:16], b"\x00\x00\x00\rIHDR")
+        self.assertEqual(struct.unpack(">II", cover[16:24]), (256, 384))
+        self.assertEqual(header[0], "#!/bin/sh")
+        self.assertIn("# Name: 象棋", header)
+        self.assertIn("# Package: exactchinesechess", header)
+        self.assertIn("# DontUseFBInk", header)
 
     def test_upgrade_keeps_saved_game(self):
         self.hook("install.sh")

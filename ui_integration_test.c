@@ -5,6 +5,8 @@
 #include <glib/gstdio.h>
 
 static char *system_menu_marker;
+static gboolean exit_flow_completed;
+static gboolean finish_exit_test(gpointer unused);
 
 static void widget_button_event(GtkWidget *widget, GdkEventType type, double x, double y) {
     GdkEvent *event = gdk_event_new(type);
@@ -144,19 +146,40 @@ static gboolean exercise_ui(gpointer unused) {
     hide_menu();
     assert(is_viewing_latest());
 
-    save_cb(NULL, NULL);
+    assert(save_game());
     assert(g_file_test(app.save_path, G_FILE_TEST_IS_REGULAR));
     undo_cb(NULL, NULL);
     assert(app.game.history_len == 0);
     load_cb(NULL, NULL);
     assert(app.game.history_len == 1);
+    app.save_protected = TRUE;
+    load_cb(NULL, NULL);
+    assert(!app.save_protected);
+    {
+        char *legacy;
+        assert(g_file_get_contents(app.save_path, &legacy, NULL, NULL));
+        *strstr(legacy, "settings") = '\0';
+        assert(g_file_set_contents(app.save_path, legacy, -1, NULL));
+        g_free(legacy);
+        load_cb(NULL, NULL);
+        assert(app.game.history_len == 1);
+    }
     app.game.game_over = true;
     app.game.winner = XIANGQI_RED;
     previous_path = app.save_path;
     app.save_path = "/dev/null/game.save";
-    save_cb(NULL, NULL);
+    assert(!save_game());
     assert(strstr(gtk_label_get_text(GTK_LABEL(app.status)), "保存失败") != NULL);
+    quit_cb(NULL, NULL);
     app.save_path = previous_path;
+    g_idle_add(finish_exit_test, NULL);
+    return FALSE;
+}
+
+static gboolean finish_exit_test(gpointer unused) {
+    (void)unused;
+    exit_flow_completed = TRUE;
+    app.save_protected = TRUE;
     show_menu();
     show_new_game_cb(NULL, NULL);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_PLAY_RED]), TRUE);
@@ -164,8 +187,35 @@ static gboolean exercise_ui(gpointer unused) {
     new_game_cb(NULL, NULL);
     assert(app.mode == MODE_PLAY_RED && app.level == XIANGQI_AI_EASY);
     assert(app.game.history_len == 0 && !gtk_widget_get_visible(app.menu_panel));
-    puts("UI passed: hidden menu, release-only move, swipe isolation, settings cancel, history exit, save/load");
-    gtk_main_quit();
+    assert(!app.save_protected);
+    app.mode = MODE_TWO_PLAYER;
+    app.level = XIANGQI_AI_HARD;
+    tap_square(6, 0);
+    tap_square(5, 0);
+    assert(app.game.history_len == 1);
+    g_remove(app.save_path);
+    history_first_cb(NULL, NULL);
+    assert(!is_viewing_latest());
+    puts("UI passed: menus, settings, legacy save, failed exit kept alive, full game auto-save");
+    quit_cb(NULL, NULL);
+    return FALSE;
+}
+
+static gboolean check_auto_resume(gpointer unused) {
+    (void)unused;
+    assert(app.game.history_len == 1);
+    assert(app.mode == MODE_TWO_PLAYER && app.level == XIANGQI_AI_HARD);
+    assert(is_viewing_latest() && !gtk_widget_get_visible(app.menu_panel));
+    puts("Auto resume passed: history, playing side, difficulty, latest view");
+    quit_cb(NULL, NULL);
+    return FALSE;
+}
+
+static gboolean check_failed_resume(gpointer unused) {
+    (void)unused;
+    assert(app.game.history_len == 0);
+    assert(app.save_protected);
+    quit_cb(NULL, NULL);
     return FALSE;
 }
 
@@ -173,14 +223,51 @@ int main(int argc, char **argv) {
     char *directory = g_dir_make_tmp("chess-ui-native-XXXXXX", NULL);
     char *command = g_build_filename(directory, "lipc-set-prop", NULL);
     char *path = g_strconcat(directory, ":", g_getenv("PATH"), NULL);
+    char *data_directory = g_build_filename(directory, "data", NULL);
+    char *save_path = g_build_filename(data_directory, "game.save", NULL);
+    char *log_path = g_build_filename(data_directory, "app.log", NULL);
     int result;
+    gboolean resume = argc > 1 && strcmp(argv[1], "--resume-check") == 0;
+    gboolean failed_resume = argc > 1 && strcmp(argv[1], "--failed-resume-check") == 0;
+    gboolean child_check = resume || failed_resume;
     system_menu_marker = g_build_filename(directory, "requested", NULL);
     assert(g_file_set_contents(command, "#!/bin/sh\n: > \"$CHESS_TEST_SYSTEM_MENU_MARKER\"\n", -1, NULL));
     assert(g_chmod(command, 0755) == 0);
     g_setenv("PATH", path, TRUE);
     g_setenv("CHESS_TEST_SYSTEM_MENU_MARKER", system_menu_marker, TRUE);
-    g_timeout_add(300, exercise_ui, NULL);
+    if (!child_check) g_setenv("EXACT_CHINESECHESS_DATA_DIR", data_directory, TRUE);
+    g_timeout_add(300, resume ? check_auto_resume : failed_resume ? check_failed_resume : exercise_ui, NULL);
     result = chess_application_main(argc, argv);
+    if (!child_check) {
+        gchar *resume_argv[] = { argv[0], "--resume-check", NULL };
+        char *corrupted, *after;
+        int status;
+        assert(exit_flow_completed && g_file_test(save_path, G_FILE_TEST_IS_REGULAR));
+        assert(g_spawn_sync(NULL, resume_argv, NULL, 0, NULL, NULL, NULL, NULL, &status, NULL));
+        assert(status == 0);
+        assert(g_file_get_contents(save_path, &corrupted, NULL, NULL));
+        *strstr(corrupted, "settings") = '\0';
+        {
+            char *invalid = g_strconcat(corrupted, "settings 999 999\n", NULL);
+            g_free(corrupted);
+            corrupted = invalid;
+        }
+        assert(g_file_set_contents(save_path, corrupted, -1, NULL));
+        resume_argv[1] = "--failed-resume-check";
+        assert(g_spawn_sync(NULL, resume_argv, NULL, 0, NULL, NULL, NULL, NULL, &status, NULL));
+        assert(status == 0);
+        assert(g_file_get_contents(save_path, &after, NULL, NULL));
+        assert(strcmp(after, corrupted) == 0);
+        puts("Failed resume passed: original save preserved on exit");
+        g_free(corrupted);
+        g_free(after);
+    }
+    g_remove(save_path);
+    g_remove(log_path);
+    g_rmdir(data_directory);
+    g_free(data_directory);
+    g_free(save_path);
+    g_free(log_path);
     g_remove(system_menu_marker);
     g_remove(command);
     g_rmdir(directory);

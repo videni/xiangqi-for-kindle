@@ -46,6 +46,12 @@ static gboolean exercise_ui(gpointer unused) {
     gtk_widget_get_allocation(app.board, &size);
     g_print("Board allocation: %d x %d\n", size.width, size.height);
     assert(size.width >= 1000 && size.height >= 1250);
+    {
+        GdkPixbuf *cannon = app.piece_images[XIANGQI_BLACK][XIANGQI_CANNON];
+        const guchar *fire_radical = gdk_pixbuf_get_pixels(cannon) +
+            60 * gdk_pixbuf_get_rowstride(cannon) + 60 * gdk_pixbuf_get_n_channels(cannon);
+        assert(fire_radical[0] < 30 && fire_radical[1] < 30 && fire_radical[2] < 30);
+    }
     capture("board.png");
     app.mode = MODE_TWO_PLAYER;
     new_game();
@@ -66,7 +72,19 @@ static gboolean exercise_ui(gpointer unused) {
     show_menu();
     previous_mode = app.mode;
     show_new_game_cb(NULL, NULL);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(app.mode_combo), MODE_PLAY_BLACK);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_PLAY_BLACK]), TRUE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.level_choices[XIANGQI_AI_EASY]), TRUE);
+    {
+        GtkWidget *label = gtk_bin_get_child(GTK_BIN(app.mode_choices[MODE_PLAY_BLACK]));
+        PangoLayout *layout = gtk_label_get_layout(GTK_LABEL(label));
+        int width, height;
+        pango_cairo_context_set_resolution(gtk_widget_get_pango_context(label), 300);
+        pango_layout_context_changed(layout);
+        pango_layout_get_pixel_size(layout, &width, &height);
+        assert(height <= 48 && width <= 200);
+        assert(!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_TWO_PLAYER])));
+    }
+    capture("newgame.png");
     assert(app.mode == previous_mode && app.game.history_len == 1);
     menu_back_cb(NULL, NULL);
     assert(app.mode == previous_mode && app.game.history_len == 1);
@@ -89,6 +107,13 @@ static gboolean exercise_ui(gpointer unused) {
     save_cb(NULL, NULL);
     assert(strstr(gtk_label_get_text(GTK_LABEL(app.status)), "保存失败") != NULL);
     app.save_path = previous_path;
+    show_menu();
+    show_new_game_cb(NULL, NULL);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_PLAY_RED]), TRUE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.level_choices[XIANGQI_AI_EASY]), TRUE);
+    new_game_cb(NULL, NULL);
+    assert(app.mode == MODE_PLAY_RED && app.level == XIANGQI_AI_EASY);
+    assert(app.game.history_len == 0 && !gtk_widget_get_visible(app.menu_panel));
     puts("UI passed: hidden menu, release-only move, swipe isolation, settings cancel, history exit, save/load");
     gtk_main_quit();
     return FALSE;

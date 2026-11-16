@@ -45,8 +45,8 @@ typedef struct {
     GtkWidget *window;
     GtkWidget *board;
     GtkWidget *status;
-    GtkWidget *mode_combo;
-    GtkWidget *level_combo;
+    GtkWidget *mode_choices[4];
+    GtkWidget *level_choices[3];
     GtkWidget *moves_label;
     GtkWidget *history_sidebar;
     GtkWidget *menu_panel;
@@ -184,11 +184,11 @@ static GdkPixbuf *normalize_piece_pixbuf(GdkPixbuf *src, XiangqiSide side) {
                 p[2] = 165;
             }
 
-            if (side == XIANGQI_RED && p[3] != 0 &&
+            if (p[3] != 0 &&
                 p[0] > 160 && p[0] > p[1] + 12 && p[0] > p[2] + 12) {
-                p[0] = 70;
-                p[1] = 70;
-                p[2] = 70;
+                p[0] = side == XIANGQI_RED ? 70 : 0;
+                p[1] = p[0];
+                p[2] = p[0];
             }
         }
     }
@@ -465,10 +465,15 @@ static void new_game(void) {
 }
 
 static void new_game_cb(GtkWidget *widget, gpointer data) {
+    int i;
     (void)widget;
     (void)data;
-    app.mode = (AppMode)gtk_combo_box_get_active(GTK_COMBO_BOX(app.mode_combo));
-    app.level = (XiangqiAiLevel)gtk_combo_box_get_active(GTK_COMBO_BOX(app.level_combo));
+    for (i = 0; i < 4; i++)
+        if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app.mode_choices[i])))
+            app.mode = (AppMode)i;
+    for (i = 0; i < 3; i++)
+        if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app.level_choices[i])))
+            app.level = (XiangqiAiLevel)i;
     pikafish_uci_set_difficulty(&app.pikafish, app.level);
     new_game();
     hide_menu();
@@ -477,8 +482,8 @@ static void new_game_cb(GtkWidget *widget, gpointer data) {
 static void show_new_game_cb(GtkWidget *widget, gpointer data) {
     (void)widget;
     (void)data;
-    gtk_combo_box_set_active(GTK_COMBO_BOX(app.mode_combo), app.mode);
-    gtk_combo_box_set_active(GTK_COMBO_BOX(app.level_combo), app.level);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.mode_choices[app.mode]), TRUE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.level_choices[app.level]), TRUE);
     gtk_widget_hide(app.menu_actions);
     gtk_widget_show(app.new_game_panel);
 }
@@ -684,7 +689,8 @@ static void load_assets(void) {
     for (side = 0; side < 2; side++) {
         for (type = 0; type < 7; type++) {
             char path[128];
-            snprintf(path, sizeof(path), "%s/%c_%s.png", prefix, side == XIANGQI_RED ? 'r' : 'b', piece_names[type]);
+            char artwork_side = (side == XIANGQI_RED || type == XIANGQI_CANNON) ? 'r' : 'b';
+            snprintf(path, sizeof(path), "%s/%c_%s.png", prefix, artwork_side, piece_names[type]);
             GdkPixbuf *loaded = gdk_pixbuf_new_from_file(path, &error);
             if (loaded != NULL) {
                 app.piece_images[side][type] = normalize_piece_pixbuf(loaded, side);
@@ -1065,9 +1071,7 @@ static void update_ui(void) {
         snprintf(status, sizeof(status), "%s方走棋%s%s", app.game.turn == XIANGQI_RED ? "红" : "黑",
                  app.message[0] ? " · " : "", app.message);
     }
-    snprintf(moves, sizeof(moves), "第 %d 手 · %s",
-             app.game.history_len,
-             app.pikafish_available ? "皮卡鱼" : "内置 AI");
+    snprintf(moves, sizeof(moves), "第 %d 手", app.game.history_len);
     if (!is_viewing_latest()) {
         char review[128];
         snprintf(review, sizeof(review), "复盘 · 第 %d / %d 手", current_view_ply(), app.game.history_len);
@@ -1078,31 +1082,6 @@ static void update_ui(void) {
     gtk_label_set_text(GTK_LABEL(app.moves_label), moves);
     update_history_panel();
     gtk_widget_queue_draw(app.board);
-}
-
-static gboolean combo_button_press_cb(GtkWidget *widget, GdkEventButton *event, gpointer data) {
-    (void)data;
-
-    if (event->type != GDK_BUTTON_PRESS || event->button != 1) {
-        return FALSE;
-    }
-
-    gtk_widget_grab_focus(widget);
-    gtk_combo_box_popup(GTK_COMBO_BOX(widget));
-    return TRUE;
-}
-
-static GtkWidget *make_combo(const char **items, int count, int active) {
-    GtkWidget *combo = gtk_combo_box_new_text();
-    int i;
-    for (i = 0; i < count; i++) {
-        gtk_combo_box_append_text(GTK_COMBO_BOX(combo), items[i]);
-    }
-    gtk_combo_box_set_active(GTK_COMBO_BOX(combo), active);
-    app_apply_high_contrast(combo);
-    gtk_widget_add_events(combo, GDK_BUTTON_PRESS_MASK);
-    g_signal_connect(combo, "button-press-event", G_CALLBACK(combo_button_press_cb), NULL);
-    return combo;
 }
 
 static void add_button(GtkWidget *box, const char *label, GCallback callback) {
@@ -1120,15 +1099,45 @@ static GtkWidget *add_history_button(GtkWidget *box, const char *label, GCallbac
     return button;
 }
 
-static GtkWidget *labeled_combo(GtkWidget *row, const char *label_text, GtkWidget *combo) {
-    GtkWidget *box = gtk_hbox_new(FALSE, 4);
-    GtkWidget *label = gtk_label_new(label_text);
-    gtk_box_pack_start(GTK_BOX(row), box, TRUE, TRUE, 0);
-    gtk_misc_set_alignment(GTK_MISC(label), 0.0f, 0.5f);
-    gtk_widget_set_size_request(label, 80, -1);
-    gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), combo, TRUE, TRUE, 0);
-    return combo;
+static void choice_toggled_cb(GtkToggleButton *button, gpointer data) {
+    GdkColor black = {0, 0, 0, 0};
+    GdkColor white = {0, 0xffff, 0xffff, 0xffff};
+    gboolean active = gtk_toggle_button_get_active(button);
+    GtkWidget *label = gtk_bin_get_child(GTK_BIN(button));
+    int state;
+    (void)data;
+    for (state = GTK_STATE_NORMAL; state <= GTK_STATE_INSENSITIVE; state++) {
+        gtk_widget_modify_bg(GTK_WIDGET(button), state, active ? &black : &white);
+        gtk_widget_modify_fg(label, state, active ? &white : &black);
+    }
+}
+
+static GtkWidget *make_choice_row(const char **items, int count, GtkWidget **choices) {
+    GtkWidget *row = gtk_hbox_new(TRUE, 12);
+    GSList *group = NULL;
+    int i;
+    for (i = 0; i < count; i++) {
+        choices[i] = gtk_radio_button_new_with_label(group, items[i]);
+        group = gtk_radio_button_get_group(GTK_RADIO_BUTTON(choices[i]));
+        gtk_toggle_button_set_mode(GTK_TOGGLE_BUTTON(choices[i]), FALSE);
+        gtk_widget_set_size_request(choices[i], -1, 84);
+        gtk_box_pack_start(GTK_BOX(row), choices[i], TRUE, TRUE, 0);
+        g_signal_connect(choices[i], "toggled", G_CALLBACK(choice_toggled_cb), NULL);
+        choice_toggled_cb(GTK_TOGGLE_BUTTON(choices[i]), NULL);
+    }
+    return row;
+}
+
+static void set_form_label_size(GtkWidget *widget, gpointer pixels) {
+    if (GTK_IS_LABEL(widget)) {
+        PangoAttrList *attributes = pango_attr_list_new();
+        pango_attr_list_insert(attributes, pango_attr_size_new_absolute(
+            GPOINTER_TO_INT(pixels) * PANGO_SCALE));
+        gtk_label_set_attributes(GTK_LABEL(widget), attributes);
+        pango_attr_list_unref(attributes);
+    }
+    if (GTK_IS_CONTAINER(widget))
+        gtk_container_foreach(GTK_CONTAINER(widget), set_form_label_size, pixels);
 }
 
 static void menu_undo_cb(GtkWidget *widget, gpointer data) {
@@ -1241,21 +1250,23 @@ int main(int argc, char **argv) {
     add_button(row, "退出", G_CALLBACK(quit_cb));
 
     app.new_game_panel = gtk_vbox_new(FALSE, 12);
+    gtk_container_set_border_width(GTK_CONTAINER(app.new_game_panel), 12);
     gtk_box_pack_start(GTK_BOX(app.menu_panel), app.new_game_panel, FALSE, FALSE, 0);
-    row = gtk_hbox_new(FALSE, 12);
-    gtk_widget_set_size_request(row, -1, 80);
+    row = gtk_label_new("对弈方式");
+    gtk_misc_set_alignment(GTK_MISC(row), 0, 0.5);
     gtk_box_pack_start(GTK_BOX(app.new_game_panel), row, FALSE, FALSE, 0);
-    app.mode_combo = make_combo(modes, 4, app.mode);
-    labeled_combo(row, "执方", app.mode_combo);
-    row = gtk_hbox_new(FALSE, 12);
-    gtk_widget_set_size_request(row, -1, 80);
+    row = make_choice_row(modes, 4, app.mode_choices);
     gtk_box_pack_start(GTK_BOX(app.new_game_panel), row, FALSE, FALSE, 0);
-    app.level_combo = make_combo(levels, 3, app.level);
-    labeled_combo(row, "难度", app.level_combo);
-    row = gtk_hbox_new(TRUE, 8);
+    row = gtk_label_new("电脑难度");
+    gtk_misc_set_alignment(GTK_MISC(row), 0, 0.5);
+    gtk_box_pack_start(GTK_BOX(app.new_game_panel), row, FALSE, FALSE, 0);
+    row = make_choice_row(levels, 3, app.level_choices);
+    gtk_box_pack_start(GTK_BOX(app.new_game_panel), row, FALSE, FALSE, 0);
+    row = gtk_hbox_new(TRUE, 12);
     gtk_box_pack_start(GTK_BOX(app.new_game_panel), row, FALSE, FALSE, 0);
     add_button(row, "返回", G_CALLBACK(menu_back_cb));
     add_button(row, "开始新局", G_CALLBACK(new_game_cb));
+    set_form_label_size(app.new_game_panel, GINT_TO_POINTER(32));
 
     app.history_sidebar = gtk_vbox_new(FALSE, 8);
     gtk_box_pack_start(GTK_BOX(app.menu_panel), app.history_sidebar, FALSE, FALSE, 0);

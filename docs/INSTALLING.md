@@ -4,7 +4,7 @@
 
 设备需要已越狱并可运行 KPM，书库入口需要 Hotfix 的 Scriptlet 支持，不需要 KUAL。
 
-下载 [v0.2.2 的 xiangqi.kpkg](https://github.com/videni/chinese-chess-for-kindle/releases/download/v0.2.2/xiangqi.kpkg)。
+下载 [v0.2.3 的 xiangqi.kpkg](https://github.com/videni/xiangqi-for-kindle/releases/download/v0.2.3/xiangqi.kpkg)。
 该 `kindlehf` 安装包已在 PW4 / 固件 5.18.1.1.1 / KPM 0.2.4 验证；其他机型尚未实测。
 
 1. 把下载的 `xiangqi.kpkg` 复制到 Kindle USB 存储根目录。
@@ -17,7 +17,7 @@
 3. 安装后打开书库里的“象棋”。也可以在搜索栏执行：
 
 ```text
-;kpm launch exactchinesechess
+;kpm launch xiangqi
 ```
 
 包平台为 `kindlehf`，manifest v2，包含应用、ARM 运行库、Pikafish 和 NNUE。
@@ -44,6 +44,17 @@
 - 书库启动入口关闭 FBInk 的脚本输出，直接进入应用；诊断信息写入数据目录的 `scriptlet.log`。
 - 书库封面使用黑白中国象棋图，通过 Scriptlet 前六行内的 `# Icon:` 内嵌 JPEG 设置。
 
+## 从旧包更新
+
+v0.2.3 起，KPM 包名统一为 `xiangqi`。使用旧包的设备先从菜单退出保存对局，再执行：
+
+```text
+;kpm uninstall exactchinesechess
+;kpm install file:///mnt/us/xiangqi.kpkg
+```
+
+以上两条命令分别执行。安装后使用 `;kpm launch xiangqi`，或打开书库里的“象棋”。原存档目录继续使用。
+
 ## 存档与卸载
 
 ```text
@@ -55,7 +66,7 @@
 升级保留存档；卸载保留该数据目录。卸载命令：
 
 ```text
-;kpm uninstall exactchinesechess
+;kpm uninstall xiangqi
 ```
 
 KPM 0.2.4 覆盖安装本地包若出现 `Could not resolve dependency graph`，先退出象棋完成自动保存，再用以上命令卸载应用，随后重新执行本地包安装命令。存档目录保留；该流程已在 PW4 验证。

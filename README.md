@@ -1,8 +1,8 @@
-# Chinese Chess for Kindle
+# Xiangqi for Kindle
 
 面向越狱 Kindle 的中国象棋，支持 KPM 安装、Pikafish 离线对弈和自动续局。
 
-**[下载 v0.2.2 安装包](https://github.com/videni/chinese-chess-for-kindle/releases/download/v0.2.2/xiangqi.kpkg)** · [发布说明](https://github.com/videni/chinese-chess-for-kindle/releases/tag/v0.2.2)
+**[下载 v0.2.3 安装包](https://github.com/videni/xiangqi-for-kindle/releases/download/v0.2.3/xiangqi.kpkg)** · [发布说明](https://github.com/videni/xiangqi-for-kindle/releases/tag/v0.2.3)
 
 ## 界面
 
@@ -36,7 +36,7 @@ PW4 真机界面：
 3. 安装后打开书库里的“象棋”，或在搜索栏执行：
 
 ```text
-;kpm launch exactchinesechess
+;kpm launch xiangqi
 ```
 
 安装包包含应用、ARM 运行库、Pikafish 和 NNUE。

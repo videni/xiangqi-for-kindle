@@ -38,7 +38,7 @@ class PackageTests(unittest.TestCase):
         self.build()
         with tarfile.open(self.output, "r:gz") as archive:
             manifest = json.load(archive.extractfile("manifest.json"))
-            self.assertEqual(manifest["id"], "exactchinesechess")
+            self.assertEqual(manifest["id"], "xiangqi")
             self.assertEqual(archive.extractfile("payload/bin/armhf/exact-chinesechess").read(),
                              self.binary.read_bytes())
             self.assertTrue(archive.getmember("payload/bin/armhf/pikafish").mode & 0o111)

@@ -49,7 +49,7 @@ class KpmHooksTests(unittest.TestCase):
         self.assertTrue(cover.startswith(b"\xff\xd8") and cover.endswith(b"\xff\xd9"))
         self.assertEqual(header[0], "#!/bin/sh")
         self.assertIn("# Name: 象棋", header)
-        self.assertIn("# Package: exactchinesechess", header)
+        self.assertIn("# Package: xiangqi", header)
         self.assertIn("# DontUseFBInk", header)
 
     def test_install_migrates_only_an_owned_legacy_entry(self):

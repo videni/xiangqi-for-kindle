@@ -986,7 +986,17 @@ static gboolean board_tap(GtkWidget *widget, GdkEventButton *event) {
     int col;
     int id;
 
-    if (event->button != 1 || !is_human_turn()) {
+    if (event->button != 1) return TRUE;
+
+    board_geometry(widget, &left, &top, &cell);
+    col = (int)floor((event->x - left + cell / 2.0) / cell);
+    row = (int)floor((event->y - top + cell / 2.0) / cell);
+    if (row >= XIANGQI_ROWS) {
+        show_menu();
+        return TRUE;
+    }
+
+    if (!is_human_turn()) {
         if (!is_viewing_latest()) {
             set_message("请返回当前对局后走棋");
             update_ui();
@@ -994,9 +1004,6 @@ static gboolean board_tap(GtkWidget *widget, GdkEventButton *event) {
         return TRUE;
     }
 
-    board_geometry(widget, &left, &top, &cell);
-    col = (int)floor((event->x - left + cell / 2.0) / cell);
-    row = (int)floor((event->y - top + cell / 2.0) / cell);
     if (row < 0 || row >= XIANGQI_ROWS || col < 0 || col >= XIANGQI_COLS) {
         return TRUE;
     }

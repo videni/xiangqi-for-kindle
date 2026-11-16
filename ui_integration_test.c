@@ -71,6 +71,40 @@ static gboolean exercise_ui(gpointer unused) {
     }
     app.mode = MODE_TWO_PLAYER;
     new_game();
+    {
+        double left, top, cell;
+        const double bottom_x[] = { 8, size.width / 2.0, size.width - 8 };
+        int i;
+        tap_square(6, 0);
+        for (i = 0; i < 3; i++) {
+            int selected = app.game.selected_id;
+            button_event(GDK_BUTTON_PRESS, bottom_x[i], size.height - 8);
+            assert(!gtk_widget_get_visible(app.menu_panel));
+            button_event(GDK_BUTTON_RELEASE, bottom_x[i], size.height - 8);
+            assert(gtk_widget_get_visible(app.menu_panel));
+            assert(app.game.history_len == 0 && app.game.selected_id == selected);
+            hide_menu();
+            while (gtk_events_pending()) gtk_main_iteration();
+        }
+        app.mode = MODE_PLAY_BLACK;
+        button_event(GDK_BUTTON_PRESS, size.width / 2, size.height - 8);
+        button_event(GDK_BUTTON_RELEASE, size.width / 2, size.height - 8);
+        assert(gtk_widget_get_visible(app.menu_panel) && app.game.history_len == 0);
+        hide_menu();
+        app.mode = MODE_TWO_PLAYER;
+        app.game.game_over = true;
+        button_event(GDK_BUTTON_PRESS, size.width / 2, size.height - 8);
+        button_event(GDK_BUTTON_RELEASE, size.width / 2, size.height - 8);
+        assert(gtk_widget_get_visible(app.menu_panel) && app.game.history_len == 0);
+        hide_menu();
+        app.game.game_over = false;
+        while (gtk_events_pending()) gtk_main_iteration();
+        board_geometry(app.board, &left, &top, &cell);
+        button_event(GDK_BUTTON_PRESS, left, top + 9.5 * cell - 1);
+        button_event(GDK_BUTTON_RELEASE, left, top + 9.5 * cell - 1);
+        assert(!gtk_widget_get_visible(app.menu_panel));
+        assert(app.game.selected_id == xiangqi_piece_at(&app.game, 9, 0));
+    }
     tap_square(6, 0);
     assert(app.game.selected_id >= 0);
     button_event(GDK_BUTTON_PRESS, size.width / 2, size.height - 15);

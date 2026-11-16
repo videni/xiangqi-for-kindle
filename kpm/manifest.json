@@ -4,7 +4,7 @@
   "name": "象棋",
   "author": "jckhng",
   "description": "支持皮卡鱼的离线象棋，底边上滑打开菜单。",
-  "version": [0, 2, 1],
+  "version": [0, 2, 2],
   "dependencies": [],
   "supported_platforms": ["kindlehf"]
 }

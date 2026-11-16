@@ -8,6 +8,34 @@ static char *system_menu_marker;
 static gboolean exit_flow_completed;
 static gboolean finish_exit_test(gpointer unused);
 static GtkAllocation closed_board;
+static gboolean track_exposes;
+static int expose_count;
+static GdkRectangle exposed_area;
+
+static int native_output_windows(Window parent) {
+    Display *display = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
+    Window root, owner, *children = NULL;
+    unsigned int count = 0, i;
+    int output = 0;
+    assert(XQueryTree(display, parent, &root, &owner, &children, &count));
+    for (i = 0; i < count; i++) {
+        XWindowAttributes attributes;
+        assert(XGetWindowAttributes(display, children[i], &attributes));
+        /* GTK may keep mapped 1x1 helper windows; count actual drawing surfaces. */
+        if (attributes.class == InputOutput && attributes.map_state == IsViewable &&
+            attributes.width > 1 && attributes.height > 1) output++;
+        output += native_output_windows(children[i]);
+    }
+    if (children) XFree(children);
+    return output;
+}
+
+static void flush_ui(void) {
+    while (gtk_events_pending()) gtk_main_iteration();
+    gdk_window_process_all_updates();
+    XSync(GDK_DISPLAY_XDISPLAY(gdk_display_get_default()), False);
+    while (gtk_events_pending()) gtk_main_iteration();
+}
 
 static void assert_board_frame(GtkWidget *widget, GtkAllocation *frame, gpointer unused) {
     (void)widget;
@@ -20,96 +48,135 @@ static void assert_board_frame(GtkWidget *widget, GtkAllocation *frame, gpointer
     }
 }
 
-static void assert_menu_frame(GtkWidget *widget, GtkAllocation *frame, gpointer unused) {
-    GtkAllocation window;
-    (void)widget;
-    (void)unused;
-    gtk_widget_get_allocation(app.window, &window);
-    if (frame->x != 24 || frame->y + frame->height != window.height - 24 ||
-        frame->width != window.width - 48) {
-        g_printerr("Transient menu allocation: %d,%d %dx%d\n",
-                   frame->x, frame->y, frame->width, frame->height);
-        assert(FALSE);
-    }
-}
-
 static void assert_board_fixed(void) {
     GtkAllocation size;
-    while (gtk_events_pending()) gtk_main_iteration();
+    flush_ui();
     gtk_widget_get_allocation(app.board, &size);
-    assert(size.x == closed_board.x && size.y == closed_board.y);
-    assert(size.width == closed_board.width && size.height == closed_board.height);
+    assert_board_frame(app.board, &size, NULL);
+    assert(native_output_windows(GDK_WINDOW_XID(gtk_widget_get_window(app.window))) == 1);
 }
 
-static void widget_button_event(GtkWidget *widget, GdkEventType type, double x, double y) {
-    GdkEvent *event = gdk_event_new(type);
-    event->button.window = g_object_ref(gtk_widget_get_window(widget));
-    event->button.button = 1;
-    event->button.x = x;
-    event->button.y = y;
-    gtk_propagate_event(widget, event);
-    gdk_event_free(event);
+static gboolean observe_expose(GtkWidget *widget, GdkEventExpose *event, gpointer unused) {
+    (void)widget;
+    (void)unused;
+    if (track_exposes) {
+        GdkRectangle *rectangles = NULL;
+        int count = 0;
+        expose_count++;
+        exposed_area = event->area;
+        gdk_region_get_rectangles(event->region, &rectangles, &count);
+        assert(count == 1);
+        assert(rectangles[0].x == event->area.x && rectangles[0].y == event->area.y);
+        assert(rectangles[0].width == event->area.width && rectangles[0].height == event->area.height);
+        g_free(rectangles);
+    }
+    return FALSE;
+}
+
+static void begin_menu_expose(void) {
+    flush_ui();
+    expose_count = 0;
+    track_exposes = TRUE;
+}
+
+static void end_menu_expose(GtkAllocation expected) {
+    flush_ui();
+    track_exposes = FALSE;
+    if (expose_count != 1 || exposed_area.x != expected.x || exposed_area.y != expected.y ||
+        exposed_area.width != expected.width || exposed_area.height != expected.height) {
+        g_printerr("Menu expose: count=%d area=%d,%d %dx%d expected=%d,%d %dx%d\n",
+                   expose_count, exposed_area.x, exposed_area.y, exposed_area.width, exposed_area.height,
+                   expected.x, expected.y, expected.width, expected.height);
+        assert(FALSE);
+    }
+    assert_board_fixed();
 }
 
 static void button_event(GdkEventType type, double x, double y) {
-    widget_button_event(app.board, type, x, y);
+    GdkEvent *event = gdk_event_new(type);
+    event->button.window = g_object_ref(gtk_widget_get_window(app.board));
+    event->button.button = 1;
+    event->button.x = x;
+    event->button.y = y;
+    gtk_propagate_event(app.board, event);
+    gdk_event_free(event);
+}
+
+static void tap_at(double x, double y) {
+    button_event(GDK_BUTTON_PRESS, x, y);
+    button_event(GDK_BUTTON_RELEASE, x, y);
 }
 
 static void tap_square(int row, int col) {
     double left, top, cell;
     board_geometry(app.board, &left, &top, &cell);
-    button_event(GDK_BUTTON_PRESS, left + col * cell, top + row * cell);
-    button_event(GDK_BUTTON_RELEASE, left + col * cell, top + row * cell);
+    tap_at(left + col * cell, top + row * cell);
 }
 
-static void capture(const char *name) {
-    const char *directory = g_getenv("CHESS_TEST_SCREENSHOTS");
-    GtkAllocation size;
-    GdkPixbuf *pixels;
-    char *path;
-    if (!directory) return;
-    while (gtk_events_pending()) gtk_main_iteration();
-    gtk_widget_get_allocation(app.window, &size);
-    pixels = gdk_pixbuf_get_from_drawable(NULL, gtk_widget_get_window(app.window),
-                                        NULL, 0, 0, 0, 0, size.width, size.height);
-    assert(pixels);
-    path = g_build_filename(directory, name, NULL);
-    assert(gdk_pixbuf_save(pixels, path, "png", NULL, NULL));
-    g_free(path);
-    g_object_unref(pixels);
+static void open_menu_at(double x, double y) {
+    XiangqiGame before;
+    memcpy(&before, &app.game, sizeof(before));
+    assert(app.menu_view == MENU_CLOSED);
+    begin_menu_expose();
+    button_event(GDK_BUTTON_PRESS, x, y);
+    assert(app.menu_view == MENU_CLOSED && expose_count == 0);
+    button_event(GDK_BUTTON_RELEASE, x, y);
+    assert(app.menu_view == MENU_ACTIONS);
+    assert(memcmp(&before, &app.game, sizeof(before)) == 0);
+    end_menu_expose(menu_geometry());
+}
+
+static void close_menu_at(double x, double y) {
+    XiangqiGame before;
+    GtkAllocation area = menu_geometry();
+    memcpy(&before, &app.game, sizeof(before));
+    assert(app.menu_view != MENU_CLOSED);
+    begin_menu_expose();
+    tap_at(x, y);
+    assert(app.menu_view == MENU_CLOSED);
+    assert(memcmp(&before, &app.game, sizeof(before)) == 0);
+    end_menu_expose(area);
+}
+
+static void tap_action(int index) {
+    GtkAllocation panel = menu_geometry();
+    assert(app.menu_view == MENU_ACTIONS && index >= 0 && index < 3);
+    if (index == 0) begin_menu_expose();
+    tap_at(panel.x + 16 + (index + 0.5) * (panel.width - 32) / 3.0, panel.y + 92);
+    if (index == 0) end_menu_expose(menu_geometry());
+}
+
+static void tap_choice(int index, gboolean difficulty) {
+    GtkAllocation panel = menu_geometry();
+    double width = (panel.width - 32 - 24) / 3.0;
+    assert(app.menu_view == MENU_NEW_GAME && index >= 0 && index < 3);
+    assert(!difficulty || app.pending_mode != MODE_TWO_PLAYER);
+    begin_menu_expose();
+    tap_at(panel.x + 16 + index * (width + 12) + width / 2.0,
+           panel.y + (difficulty ? 280 : 139));
+    {
+        GtkAllocation next = menu_geometry();
+        if (next.y < panel.y) panel = next;
+        end_menu_expose(panel);
+    }
+}
+
+static void tap_form_button(gboolean start) {
+    GtkAllocation panel = menu_geometry();
+    double width = (panel.width - 32 - 12) / 2.0;
+    assert(app.menu_view == MENU_NEW_GAME);
+    if (!start) begin_menu_expose();
+    tap_at(panel.x + 16 + (start ? width + 12 : 0) + width / 2.0,
+           panel.y + (app.pending_mode == MODE_TWO_PLAYER ? 233 : 374));
+    if (!start) end_menu_expose(panel);
 }
 
 static void assert_compact_menu(double closed_cell) {
-    const char *labels[] = { "新局", "悔棋", "退出" };
-    GtkAllocation panel_size, board_size, first_button;
-    GList *buttons, *item;
+    GtkAllocation panel = menu_geometry();
     double left, top, cell;
-    int index = 0;
-    while (gtk_events_pending()) gtk_main_iteration();
-    assert(gtk_widget_get_visible(app.menu_panel));
-    assert(GTK_IS_HBOX(app.menu_actions));
-    buttons = gtk_container_get_children(GTK_CONTAINER(app.menu_actions));
-    assert(g_list_length(buttons) == 3);
-    for (item = buttons; item != NULL; item = item->next, index++) {
-        GtkWidget *button = GTK_WIDGET(item->data);
-        GtkAllocation size;
-        assert(GTK_IS_BUTTON(button) && gtk_widget_get_visible(button));
-        assert(strcmp(gtk_button_get_label(GTK_BUTTON(button)), labels[index]) == 0);
-        gtk_widget_get_allocation(button, &size);
-        assert(size.height >= 80);
-        if (index == 0) {
-            first_button = size;
-        } else {
-            assert(size.y == first_button.y && size.height == first_button.height);
-            /* GtkHBox assigns the integer division remainder to its final child. */
-            assert(size.width >= first_button.width - 2 && size.width <= first_button.width + 2);
-        }
-    }
-    g_list_free(buttons);
-    gtk_widget_get_allocation(app.menu_panel, &panel_size);
-    gtk_widget_get_allocation(app.board, &board_size);
-    g_print("Open menu allocation: %d px; board height: %d px\n", panel_size.height, board_size.height);
-    assert(panel_size.height > 80 && panel_size.height <= 160);
+    assert(app.menu_view == MENU_ACTIONS);
+    assert(panel.x == 24 && panel.width == closed_board.width - 48);
+    assert(panel.height == 148 && panel.y + panel.height == closed_board.height - 24);
     assert_board_fixed();
     board_geometry(app.board, &left, &top, &cell);
     assert(fabs(cell - closed_cell) < 0.01);
@@ -119,16 +186,17 @@ static gboolean exercise_ui(gpointer unused) {
     GtkAllocation size;
     double closed_cell;
     AppMode previous_mode;
+    XiangqiAiLevel previous_level;
     char *previous_path;
     (void)unused;
-    assert(!gtk_widget_get_visible(app.menu_panel));
+    assert(app.menu_view == MENU_CLOSED);
     gtk_widget_get_allocation(app.board, &size);
     closed_board = size;
     g_signal_connect_after(app.board, "size-allocate", G_CALLBACK(assert_board_frame), NULL);
-    g_signal_connect_after(app.menu_panel, "size-allocate", G_CALLBACK(assert_menu_frame), NULL);
+    g_signal_connect_after(app.board, "expose-event", G_CALLBACK(observe_expose), NULL);
     g_print("Board allocation: %d x %d\n", size.width, size.height);
     assert(size.width >= 1000 && size.height >= 1250);
-    assert(strcmp(gtk_label_get_text(GTK_LABEL(app.status)), "红方走棋") == 0);
+    assert(strcmp(current_status(), "红方走棋") == 0);
     {
         double left, top;
         board_geometry(app.board, &left, &top, &closed_cell);
@@ -139,26 +207,35 @@ static gboolean exercise_ui(gpointer unused) {
             60 * gdk_pixbuf_get_rowstride(cannon) + 60 * gdk_pixbuf_get_n_channels(cannon);
         assert(fire_radical[0] < 30 && fire_radical[1] < 30 && fire_radical[2] < 30);
     }
-    capture("board.png");
     {
         gchar *activate[] = { "./ui-test", "--activate", NULL };
         int status;
         assert(g_spawn_sync(NULL, activate, NULL, 0, NULL, NULL, NULL, NULL, &status, NULL));
         assert(status == 0 && app.game.history_len == 0);
     }
-    widget_button_event(app.status_panel, GDK_BUTTON_PRESS, 500, 28);
-    widget_button_event(app.status_panel, GDK_BUTTON_RELEASE, 500, 28);
-    assert(gtk_widget_get_visible(app.menu_panel));
     assert_board_fixed();
-    hide_menu();
-    widget_button_event(app.window, GDK_BUTTON_PRESS, 500, 12);
-    widget_button_event(app.window, GDK_BUTTON_RELEASE, 500, 200);
+    open_menu_at(500, 28);
+    assert_compact_menu(closed_cell);
+    {
+        GtkAllocation panel = menu_geometry();
+        close_menu_at(panel.x + 8, panel.y + 92);
+        open_menu_at(500, 28);
+        panel = menu_geometry();
+        close_menu_at(panel.x + panel.width / 2.0, panel.y + 140);
+        open_menu_at(500, 28);
+    }
+    {
+        GtkAllocation panel = menu_geometry();
+        close_menu_at(panel.x + panel.width / 2.0, panel.y + 30);
+    }
+    button_event(GDK_BUTTON_PRESS, 500, 12);
+    button_event(GDK_BUTTON_RELEASE, 500, 200);
     {
         gint64 deadline = g_get_monotonic_time() + 2000000;
         while (!g_file_test(system_menu_marker, G_FILE_TEST_EXISTS) && g_get_monotonic_time() < deadline)
             g_usleep(10000);
         assert(g_file_test(system_menu_marker, G_FILE_TEST_EXISTS));
-        assert(!gtk_widget_get_visible(app.menu_panel) && app.game.history_len == 0);
+        assert(app.menu_view == MENU_CLOSED && app.game.history_len == 0);
     }
     app.mode = MODE_TWO_PLAYER;
     new_game();
@@ -168,90 +245,88 @@ static gboolean exercise_ui(gpointer unused) {
         int i;
         tap_square(6, 0);
         for (i = 0; i < 3; i++) {
-            int selected = app.game.selected_id;
-            button_event(GDK_BUTTON_PRESS, bottom_x[i], size.height - 8);
-            assert(!gtk_widget_get_visible(app.menu_panel));
-            button_event(GDK_BUTTON_RELEASE, bottom_x[i], size.height - 8);
-            assert(gtk_widget_get_visible(app.menu_panel));
-            assert(app.game.history_len == 0 && app.game.selected_id == selected);
-            hide_menu();
-            while (gtk_events_pending()) gtk_main_iteration();
-            button_event(GDK_BUTTON_PRESS, bottom_x[i], 80);
-            button_event(GDK_BUTTON_RELEASE, bottom_x[i], 80);
-            assert(gtk_widget_get_visible(app.menu_panel));
-            assert_board_fixed();
-            hide_menu();
-            while (gtk_events_pending()) gtk_main_iteration();
+            open_menu_at(bottom_x[i], size.height - 8);
+            close_menu_at(500, 300);
+            open_menu_at(bottom_x[i], 80);
+            close_menu_at(500, 300);
         }
         app.mode = MODE_PLAY_BLACK;
-        button_event(GDK_BUTTON_PRESS, size.width / 2, size.height - 8);
-        button_event(GDK_BUTTON_RELEASE, size.width / 2, size.height - 8);
-        assert(gtk_widget_get_visible(app.menu_panel) && app.game.history_len == 0);
-        hide_menu();
+        open_menu_at(size.width / 2.0, size.height - 8);
+        close_menu_at(500, 300);
         app.mode = MODE_TWO_PLAYER;
         app.game.game_over = true;
-        button_event(GDK_BUTTON_PRESS, size.width / 2, size.height - 8);
-        button_event(GDK_BUTTON_RELEASE, size.width / 2, size.height - 8);
-        assert(gtk_widget_get_visible(app.menu_panel) && app.game.history_len == 0);
-        hide_menu();
+        open_menu_at(size.width / 2.0, size.height - 8);
+        close_menu_at(500, 300);
         app.game.game_over = false;
-        while (gtk_events_pending()) gtk_main_iteration();
         board_geometry(app.board, &left, &top, &cell);
-        button_event(GDK_BUTTON_PRESS, left, top + 9.5 * cell - 1);
-        button_event(GDK_BUTTON_RELEASE, left, top + 9.5 * cell - 1);
-        assert(!gtk_widget_get_visible(app.menu_panel));
+        tap_at(left, top + 9.5 * cell - 1);
+        assert(app.menu_view == MENU_CLOSED);
         assert(app.game.selected_id == xiangqi_piece_at(&app.game, 9, 0));
     }
     tap_square(6, 0);
     assert(app.game.selected_id >= 0);
-    button_event(GDK_BUTTON_PRESS, size.width / 2, size.height - 15);
-    assert(app.game.history_len == 0);
-    button_event(GDK_BUTTON_RELEASE, size.width / 2, size.height - 200);
-    assert(gtk_widget_get_visible(app.menu_panel));
-    assert(app.game.history_len == 0);
+    begin_menu_expose();
+    button_event(GDK_BUTTON_PRESS, size.width / 2.0, size.height - 15);
+    assert(app.game.history_len == 0 && app.menu_view == MENU_CLOSED);
+    button_event(GDK_BUTTON_RELEASE, size.width / 2.0, size.height - 200);
+    assert(app.menu_view == MENU_ACTIONS && app.game.history_len == 0);
+    end_menu_expose(menu_geometry());
     assert_compact_menu(closed_cell);
-    capture("menu.png");
-    widget_button_event(app.menu_panel, GDK_BUTTON_PRESS, 8, 8);
-    widget_button_event(app.menu_panel, GDK_BUTTON_RELEASE, 8, 108);
-    assert(!gtk_widget_get_visible(app.menu_panel));
-    show_menu();
-    tap_square(5, 0);
-    assert(!gtk_widget_get_visible(app.menu_panel));
+    {
+        GtkAllocation panel = menu_geometry();
+        begin_menu_expose();
+        button_event(GDK_BUTTON_PRESS, panel.x + 8, panel.y + 8);
+        button_event(GDK_BUTTON_RELEASE, panel.x + 8, panel.y + 108);
+        assert(app.menu_view == MENU_CLOSED && app.game.history_len == 0);
+        end_menu_expose(panel);
+    }
+    open_menu_at(500, 28);
+    {
+        double left, top, cell;
+        board_geometry(app.board, &left, &top, &cell);
+        close_menu_at(left, top + 5 * cell);
+    }
     assert(app.game.history_len == 0);
     tap_square(5, 0);
     assert(app.game.history_len == 1);
 
-    show_menu();
+    open_menu_at(500, 28);
     previous_mode = app.mode;
-    show_new_game_cb(NULL, NULL);
+    previous_level = app.level;
+    tap_action(0);
+    assert(app.menu_view == MENU_NEW_GAME && app.pending_mode == MODE_TWO_PLAYER);
+    assert(menu_geometry().height == 289);
     assert_board_fixed();
-    assert(!gtk_widget_get_visible(app.difficulty_panel));
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_PLAY_BLACK]), TRUE);
-    assert(gtk_widget_get_visible(app.difficulty_panel));
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.level_choices[XIANGQI_AI_EASY]), TRUE);
+    tap_choice(MODE_PLAY_BLACK, FALSE);
+    assert(app.pending_mode == MODE_PLAY_BLACK && menu_geometry().height == 430);
+    tap_choice(XIANGQI_AI_EASY, TRUE);
+    assert(app.pending_level == XIANGQI_AI_EASY);
     {
-        GtkWidget *label = gtk_bin_get_child(GTK_BIN(app.mode_choices[MODE_PLAY_BLACK]));
-        PangoLayout *layout = gtk_label_get_layout(GTK_LABEL(label));
+        cairo_t *cr = gdk_cairo_create(gtk_widget_get_window(app.board));
+        PangoLayout *layout = ui_text_layout(cr, "我执黑", FALSE);
         int width, height;
-        pango_cairo_context_set_resolution(gtk_widget_get_pango_context(label), 300);
+        pango_cairo_context_set_resolution(pango_layout_get_context(layout), 300);
         pango_layout_context_changed(layout);
         pango_layout_get_pixel_size(layout, &width, &height);
         assert(height <= 48 && width <= 200);
-        assert(!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_TWO_PLAYER])));
-        assert(gtk_toggle_button_get_mode(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_PLAY_BLACK])));
-        assert(gtk_widget_get_style(app.mode_choices[MODE_PLAY_BLACK])->bg[GTK_STATE_ACTIVE].red == 65535);
+        g_object_unref(layout);
+        cairo_destroy(cr);
     }
-    capture("newgame.png");
-    assert(app.mode == previous_mode && app.game.history_len == 1);
-    menu_back_cb(NULL, NULL);
-    assert(app.mode == previous_mode && app.game.history_len == 1);
+    assert(app.mode == previous_mode && app.level == previous_level && app.game.history_len == 1);
+    tap_choice(MODE_TWO_PLAYER, FALSE);
+    assert(app.pending_mode == MODE_TWO_PLAYER && menu_geometry().height == 289);
+    tap_choice(MODE_PLAY_BLACK, FALSE);
+    tap_form_button(FALSE);
+    assert(app.menu_view == MENU_ACTIONS);
+    assert(app.mode == previous_mode && app.level == previous_level && app.game.history_len == 1);
     assert_compact_menu(closed_cell);
-    hide_menu();
+    close_menu_at(500, 300);
 
     assert(save_game());
     assert(g_file_test(app.save_path, G_FILE_TEST_IS_REGULAR));
-    undo_cb(NULL, NULL);
-    assert(app.game.history_len == 0);
+    open_menu_at(500, 28);
+    tap_action(1);
+    assert(app.game.history_len == 0 && app.menu_view == MENU_CLOSED);
     assert(load_game());
     assert(app.game.history_len == 1);
     app.save_protected = TRUE;
@@ -282,8 +357,9 @@ static gboolean exercise_ui(gpointer unused) {
     previous_path = app.save_path;
     app.save_path = "/dev/null/game.save";
     assert(!save_game());
-    assert(strstr(gtk_label_get_text(GTK_LABEL(app.status)), "保存失败") != NULL);
-    quit_cb(NULL, NULL);
+    assert(strstr(current_status(), "保存失败") != NULL);
+    open_menu_at(500, 28);
+    tap_action(2);
     app.save_path = previous_path;
     g_idle_add(finish_exit_test, NULL);
     return FALSE;
@@ -293,13 +369,14 @@ static gboolean finish_exit_test(gpointer unused) {
     (void)unused;
     exit_flow_completed = TRUE;
     app.save_protected = TRUE;
-    show_menu();
-    show_new_game_cb(NULL, NULL);
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.mode_choices[MODE_PLAY_RED]), TRUE);
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(app.level_choices[XIANGQI_AI_EASY]), TRUE);
-    new_game_cb(NULL, NULL);
+    if (app.menu_view != MENU_ACTIONS) show_menu();
+    tap_action(0);
+    tap_choice(MODE_PLAY_RED, FALSE);
+    tap_choice(XIANGQI_AI_EASY, TRUE);
+    assert(app.game.history_len == 1 && app.save_protected);
+    tap_form_button(TRUE);
     assert(app.mode == MODE_PLAY_RED && app.level == XIANGQI_AI_EASY);
-    assert(app.game.history_len == 0 && !gtk_widget_get_visible(app.menu_panel));
+    assert(app.game.history_len == 0 && app.menu_view == MENU_CLOSED);
     assert(!app.save_protected);
     app.mode = MODE_TWO_PLAYER;
     app.level = XIANGQI_AI_HARD;
@@ -307,15 +384,16 @@ static gboolean finish_exit_test(gpointer unused) {
     tap_square(5, 0);
     assert(app.game.history_len == 1);
     g_remove(app.save_path);
-    puts("UI passed: compact three-button menu, gestures, settings, legacy save, failed exit kept alive, full game auto-save");
-    quit_cb(NULL, NULL);
+    puts("UI passed: one drawing window, one regional expose per menu toggle, touch controls, legacy save, failed exit kept alive, auto-save");
+    open_menu_at(500, 28);
+    tap_action(2);
     return FALSE;
 }
 
 static gboolean check_resume_message_expired(gpointer unused) {
     (void)unused;
     assert(app.message[0] == '\0');
-    assert(strcmp(gtk_label_get_text(GTK_LABEL(app.status)), "黑方走棋") == 0);
+    assert(strcmp(current_status(), "黑方走棋") == 0);
     assert_board_fixed();
     puts("Resume notice passed: success shown for two seconds, then current turn; board unchanged");
     quit_cb(NULL, NULL);
@@ -326,9 +404,8 @@ static gboolean check_auto_resume(gpointer unused) {
     (void)unused;
     assert(app.game.history_len == 1);
     assert(app.mode == MODE_TWO_PLAYER && app.level == XIANGQI_AI_HARD);
-    assert(!gtk_widget_get_visible(app.menu_panel));
-    assert(gtk_widget_get_visible(app.status));
-    assert(strcmp(gtk_label_get_text(GTK_LABEL(app.status)), "已恢复上次对局") == 0);
+    assert(app.menu_view == MENU_CLOSED);
+    assert(strcmp(current_status(), "已恢复上次对局") == 0);
     gtk_widget_get_allocation(app.board, &closed_board);
     puts("Auto resume passed: history, playing side, difficulty");
     g_timeout_add(2100, check_resume_message_expired, NULL);
@@ -344,6 +421,7 @@ static gboolean check_failed_resume(gpointer unused) {
 }
 
 int main(int argc, char **argv) {
+    g_setenv("GDK_NATIVE_WINDOWS", "1", TRUE);
     if (argc > 1 && strcmp(argv[1], "--activate") == 0)
         return chess_application_main(argc, argv);
     char *directory = g_dir_make_tmp("chess-ui-native-XXXXXX", NULL);
@@ -362,7 +440,7 @@ int main(int argc, char **argv) {
     g_setenv("PATH", path, TRUE);
     g_setenv("CHESS_TEST_SYSTEM_MENU_MARKER", system_menu_marker, TRUE);
     if (!child_check) g_setenv("EXACT_CHINESECHESS_DATA_DIR", data_directory, TRUE);
-    g_timeout_add(300, resume ? check_auto_resume : failed_resume ? check_failed_resume : exercise_ui, NULL);
+    g_timeout_add(300, child_check ? (resume ? check_auto_resume : check_failed_resume) : exercise_ui, NULL);
     result = chess_application_main(argc, argv);
     if (!child_check) {
         gchar *resume_argv[] = { argv[0], "--resume-check", NULL };

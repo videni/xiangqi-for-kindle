@@ -1,5 +1,16 @@
 # Exact Chinese Chess
 
+## PW4 focused UI / KPM adaptation
+
+This branch targets PW4 firmware 5.18 with KPM. The playing screen contains
+only the board and one status line. Swipe upward from the bottom edge to open
+the menu; swipe downward or tap outside to close it. New game, undo, save,
+load, move review, and exit remain available in the menu.
+
+Install `xiangqi.kpkg` with KPM and open the `象棋` scriptlet in the library.
+KUAL is not required. Detailed build, install, and verification steps are in
+`docs/INSTALLING.md`. The upstream engine and piece artwork are preserved.
+
 A Kindle-friendly Xiangqi / Chinese Chess app using the same native GTK2/Cairo
 and KUAL packaging pattern as Kindle GlChess and Exact Reversi.
 

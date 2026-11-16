@@ -15,6 +15,7 @@
 
 #include "pikafish_uci.h"
 #include "xiangqi_engine.h"
+#include "touch_input.h"
 
 #define APP_TITLE "Exact Chinese Chess"
 #define KINDLE_WINDOW_TITLE "L:A_N:application_ID:exactchinesechess_PC:N_O:URL"
@@ -48,7 +49,9 @@ typedef struct {
     GtkWidget *level_combo;
     GtkWidget *moves_label;
     GtkWidget *history_sidebar;
-    GtkWidget *history_toggle_button;
+    GtkWidget *menu_panel;
+    GtkWidget *menu_actions;
+    GtkWidget *new_game_panel;
     GtkWidget *history_view;
     GtkWidget *history_first_button;
     GtkWidget *history_prev_button;
@@ -64,7 +67,9 @@ typedef struct {
     guint ai_source;
     int view_ply;
     char message[192];
-    gboolean history_visible;
+    TouchInput touch;
+    char *save_path;
+    char *log_path;
 } AppState;
 
 static AppState app;
@@ -79,24 +84,29 @@ static void clear_assets(void);
 static gboolean board_expose(GtkWidget *widget, GdkEventExpose *event, gpointer data);
 static gboolean board_button(GtkWidget *widget, GdkEventButton *event, gpointer data);
 
-static void toggle_history_cb(GtkWidget *widget, gpointer data) {
+static void menu_back_cb(GtkWidget *widget, gpointer data) {
     (void)widget;
     (void)data;
+    set_latest_view();
+    gtk_widget_hide(app.history_sidebar);
+    gtk_widget_hide(app.new_game_panel);
+    gtk_widget_show(app.menu_actions);
+    update_ui();
+}
 
-    app.history_visible = !app.history_visible;
-    if (app.history_visible) {
-        gtk_widget_show(app.history_sidebar);
-        gtk_button_set_label(GTK_BUTTON(app.history_toggle_button), "Hide Moves");
-    } else {
-        gtk_widget_hide(app.history_sidebar);
-        gtk_button_set_label(GTK_BUTTON(app.history_toggle_button), "Show Moves");
-    }
-    gtk_widget_queue_resize(app.board);
-    gtk_widget_queue_draw(app.board);
+static void show_menu(void) {
+    menu_back_cb(NULL, NULL);
+    gtk_widget_show(app.menu_panel);
+}
+
+static void hide_menu(void) {
+    gtk_widget_hide(app.menu_panel);
+    set_latest_view();
+    update_ui();
 }
 
 static void app_log(const char *message) {
-    FILE *f = fopen(LOG_PATH, "a");
+    FILE *f = fopen(app.log_path != NULL ? app.log_path : LOG_PATH, "a");
     if (!f) {
         return;
     }
@@ -327,6 +337,7 @@ static void app_apply_high_contrast(GtkWidget *widget) {
 
 static void app_install_kindle_style(void) {
     gtk_rc_parse_string(
+        "gtk-font-name = \"Sans 24\"\n"
         "style \"kindle_high_contrast\" {\n"
         "  fg[NORMAL] = \"#000000\"\n"
         "  fg[ACTIVE] = \"#000000\"\n"
@@ -352,20 +363,6 @@ static void app_install_kindle_style(void) {
         "widget_class \"*GtkComboBox*\" style \"kindle_high_contrast\"\n"
         "widget_class \"*GtkMenu*\" style \"kindle_high_contrast\"\n"
     );
-}
-
-static const char *mode_name(AppMode mode) {
-    switch (mode) {
-    case MODE_PLAY_RED:
-        return "Play Red";
-    case MODE_PLAY_BLACK:
-        return "Play Black";
-    case MODE_TWO_PLAYER:
-        return "2 Player";
-    case MODE_AI_DEMO:
-        return "AI Demo";
-    }
-    return "Play Red";
 }
 
 static gboolean ai_move_cb(gpointer data) {
@@ -421,7 +418,7 @@ static void pikafish_bestmove_cb(const char *uci, gpointer user_data) {
         char applied_uci[8];
         move_to_uci(&move, applied_uci, sizeof(applied_uci));
         pikafish_uci_report_move(&app.pikafish, applied_uci);
-        snprintf(label, sizeof(label), "Pikafish: %s", uci);
+        snprintf(label, sizeof(label), "%s", uci);
         set_message(label);
         set_latest_view();
     } else {
@@ -449,7 +446,7 @@ static void maybe_schedule_ai(void) {
         app.ai_source = 0;
     }
     if (is_ai_turn()) {
-        set_message("AI thinking.");
+        set_message("思考中");
         app.ai_source = g_timeout_add(250, ai_move_cb, NULL);
     }
 }
@@ -462,7 +459,7 @@ static void new_game(void) {
     xiangqi_init(&app.game);
     pikafish_uci_start_game(&app.pikafish);
     set_latest_view();
-    set_message("Red to move.");
+    set_message("");
     update_ui();
     maybe_schedule_ai();
 }
@@ -470,7 +467,28 @@ static void new_game(void) {
 static void new_game_cb(GtkWidget *widget, gpointer data) {
     (void)widget;
     (void)data;
+    app.mode = (AppMode)gtk_combo_box_get_active(GTK_COMBO_BOX(app.mode_combo));
+    app.level = (XiangqiAiLevel)gtk_combo_box_get_active(GTK_COMBO_BOX(app.level_combo));
+    pikafish_uci_set_difficulty(&app.pikafish, app.level);
     new_game();
+    hide_menu();
+}
+
+static void show_new_game_cb(GtkWidget *widget, gpointer data) {
+    (void)widget;
+    (void)data;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(app.mode_combo), app.mode);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(app.level_combo), app.level);
+    gtk_widget_hide(app.menu_actions);
+    gtk_widget_show(app.new_game_panel);
+}
+
+static void show_history_cb(GtkWidget *widget, gpointer data) {
+    (void)widget;
+    (void)data;
+    gtk_widget_hide(app.menu_actions);
+    gtk_widget_show(app.history_sidebar);
+    update_history_panel();
 }
 
 static void undo_cb(GtkWidget *widget, gpointer data) {
@@ -484,7 +502,7 @@ static void undo_cb(GtkWidget *widget, gpointer data) {
         if (app.mode == MODE_PLAY_RED || app.mode == MODE_PLAY_BLACK) {
             xiangqi_undo(&app.game);
         }
-        set_message("Move undone.");
+        set_message("已悔棋");
         report_history_to_pikafish();
         set_latest_view();
         update_ui();
@@ -497,9 +515,9 @@ static void save_cb(GtkWidget *widget, gpointer data) {
     (void)widget;
     (void)data;
 
-    f = fopen(SAVE_PATH, "w");
+    f = fopen(app.save_path, "w");
     if (!f) {
-        set_message("Save failed.");
+        set_message("保存失败，请检查存储空间");
         update_ui();
         return;
     }
@@ -509,7 +527,7 @@ static void save_cb(GtkWidget *widget, gpointer data) {
         fprintf(f, "%d %d\n", m->move_id, m->to_row * 9 + m->to_col);
     }
     fclose(f);
-    set_message("Game saved.");
+    set_message("已保存");
     update_ui();
 }
 
@@ -521,17 +539,19 @@ static void load_cb(GtkWidget *widget, gpointer data) {
     (void)widget;
     (void)data;
 
-    f = fopen(SAVE_PATH, "r");
+    f = fopen(app.save_path, "r");
+    if (f == NULL && strcmp(app.save_path, SAVE_PATH) != 0)
+        f = fopen(SAVE_PATH, "r");
     if (f == NULL)
         f = fopen(LEGACY_SAVE_PATH, "r");
     if (!f) {
-        set_message("No saved game found.");
+        set_message("还没有存档");
         update_ui();
         return;
     }
     if (fscanf(f, "%63s %*d\n%d\n", header, &count) != 2 || strcmp(header, "exact-chinesechess") != 0) {
         fclose(f);
-        set_message("Save file is invalid.");
+        set_message("存档格式无效");
         update_ui();
         return;
     }
@@ -543,31 +563,17 @@ static void load_cb(GtkWidget *widget, gpointer data) {
         if (fscanf(f, "%d %d\n", &id, &square) != 2 ||
             !xiangqi_apply_move(&app.game, id, square / 9, square % 9, &move)) {
             fclose(f);
-            set_message("Save replay failed.");
+            set_message("存档无法还原");
             update_ui();
             return;
         }
     }
     fclose(f);
-    set_message("Loaded saved game.");
+    set_message("已载入");
     report_history_to_pikafish();
     set_latest_view();
     update_ui();
     maybe_schedule_ai();
-}
-
-static void mode_changed_cb(GtkComboBox *combo, gpointer data) {
-    (void)data;
-    app.mode = (AppMode)gtk_combo_box_get_active(combo);
-    new_game();
-}
-
-static void level_changed_cb(GtkComboBox *combo, gpointer data) {
-    (void)data;
-    app.level = (XiangqiAiLevel)gtk_combo_box_get_active(combo);
-    pikafish_uci_set_difficulty(&app.pikafish, app.level);
-    maybe_schedule_ai();
-    update_ui();
 }
 
 static void history_first_cb(GtkWidget *widget, gpointer data) {
@@ -719,13 +725,10 @@ static void board_geometry(GtkWidget *widget, double *left, double *top, double 
     double usable_h;
 
     gtk_widget_get_allocation(widget, &a);
-    /* Piece radius = 0.42*cell; board margin must exceed it.
-     * With factor f: margin = (1-f)/2 * W, cell = f*W/8.
-     * Need margin > piece_radius → (1-f)/2 > 0.42*f/8 → f < 0.905.
-     * Use 0.84 to give ~25px clear on a 700px-wide board widget. */
-    usable_w = a.width * 0.84;
-    usable_h = a.height * 0.84;
-    *cell = fmin(usable_w / 8.0, usable_h / 9.0);
+    /* 留出棋子半径，避免边缘棋子被裁切。 */
+    usable_w = fmax(1, a.width - 32);
+    usable_h = fmax(1, a.height - 32);
+    *cell = fmin(usable_w / 8.9, usable_h / 9.9);
     board_w = *cell * 8.0;
     board_h = *cell * 9.0;
     *left = (a.width - board_w) / 2.0;
@@ -969,18 +972,17 @@ static gboolean board_expose(GtkWidget *widget, GdkEventExpose *event, gpointer 
     return FALSE;
 }
 
-static gboolean board_button(GtkWidget *widget, GdkEventButton *event, gpointer data) {
+static gboolean board_tap(GtkWidget *widget, GdkEventButton *event) {
     double left;
     double top;
     double cell;
     int row;
     int col;
     int id;
-    (void)data;
 
     if (event->button != 1 || !is_human_turn()) {
         if (!is_viewing_latest()) {
-            set_message("Reviewing history. Tap >> to resume.");
+            set_message("请返回当前对局后走棋");
             update_ui();
         }
         return TRUE;
@@ -997,13 +999,13 @@ static gboolean board_button(GtkWidget *widget, GdkEventButton *event, gpointer 
     if (app.game.selected_id < 0) {
         if (id != -1 && app.game.pieces[id].side == app.game.turn) {
             app.game.selected_id = id;
-            set_message("Piece selected.");
+            set_message("请选择落点");
         }
     } else {
         XiangqiMove move;
         if (id != -1 && app.game.pieces[id].side == app.game.turn) {
             app.game.selected_id = id;
-            set_message("Piece selected.");
+            set_message("请选择落点");
         } else if (xiangqi_apply_move(&app.game, app.game.selected_id, row, col, &move)) {
             char label[64];
             char uci[8];
@@ -1015,10 +1017,38 @@ static gboolean board_button(GtkWidget *widget, GdkEventButton *event, gpointer 
             set_latest_view();
             maybe_schedule_ai();
         } else {
-            set_message("Illegal move.");
+            set_message("此处不能落子");
         }
     }
     update_ui();
+    return TRUE;
+}
+
+static gboolean board_button(GtkWidget *widget, GdkEventButton *event, gpointer data) {
+    GtkAllocation size;
+    (void)data;
+    if (event->button != 1) return FALSE;
+    gtk_widget_get_allocation(widget, &size);
+    touch_input_begin(&app.touch, event->x, event->y, size.height);
+    return TRUE;
+}
+
+static gboolean board_motion(GtkWidget *widget, GdkEventMotion *event, gpointer data) {
+    (void)widget;
+    (void)data;
+    touch_input_motion(&app.touch, event->x, event->y);
+    return TRUE;
+}
+
+static gboolean board_release(GtkWidget *widget, GdkEventButton *event, gpointer data) {
+    gboolean open = gtk_widget_get_visible(app.menu_panel);
+    TouchAction action;
+    (void)data;
+    if (event->button != 1) return FALSE;
+    action = touch_input_end(&app.touch, event->x, event->y, open);
+    if (action == TOUCH_OPEN_MENU) show_menu();
+    else if (action == TOUCH_CLOSE_MENU || (action == TOUCH_TAP && open)) hide_menu();
+    else if (action == TOUCH_TAP && widget == app.board) return board_tap(widget, event);
     return TRUE;
 }
 
@@ -1027,21 +1057,20 @@ static void update_ui(void) {
     char moves[128];
 
     if (app.game.game_over) {
-        snprintf(status, sizeof(status), "%s wins. %s", xiangqi_side_name(app.game.winner), app.message);
+        snprintf(status, sizeof(status), "%s方获胜%s%s", app.game.winner == XIANGQI_RED ? "红" : "黑",
+                 app.message[0] ? " · " : "", app.message);
     } else if (is_ai_turn()) {
-        snprintf(status, sizeof(status), "%s to move. %s thinking. %s",
-                 xiangqi_side_name(app.game.turn),
-                 app.pikafish_available ? "Pikafish" : "AI",
-                 mode_name(app.mode));
+        snprintf(status, sizeof(status), "%s方思考中", app.game.turn == XIANGQI_RED ? "红" : "黑");
     } else {
-        snprintf(status, sizeof(status), "%s to move. %s", xiangqi_side_name(app.game.turn), app.message);
+        snprintf(status, sizeof(status), "%s方走棋%s%s", app.game.turn == XIANGQI_RED ? "红" : "黑",
+                 app.message[0] ? " · " : "", app.message);
     }
-    snprintf(moves, sizeof(moves), "Moves: %d  Engine: %s",
+    snprintf(moves, sizeof(moves), "第 %d 手 · %s",
              app.game.history_len,
-             app.pikafish_available ? "Pikafish" : "Built-in AI");
+             app.pikafish_available ? "皮卡鱼" : "内置 AI");
     if (!is_viewing_latest()) {
         char review[128];
-        snprintf(review, sizeof(review), "Reviewing move %d/%d.", current_view_ply(), app.game.history_len);
+        snprintf(review, sizeof(review), "复盘 · 第 %d / %d 手", current_view_ply(), app.game.history_len);
         gtk_label_set_text(GTK_LABEL(app.status), review);
     } else {
         gtk_label_set_text(GTK_LABEL(app.status), status);
@@ -1078,12 +1107,14 @@ static GtkWidget *make_combo(const char **items, int count, int active) {
 
 static void add_button(GtkWidget *box, const char *label, GCallback callback) {
     GtkWidget *button = gtk_button_new_with_label(label);
+    gtk_widget_set_size_request(button, -1, 80);
     gtk_box_pack_start(GTK_BOX(box), button, TRUE, TRUE, 0);
     g_signal_connect(button, "clicked", callback, NULL);
 }
 
 static GtkWidget *add_history_button(GtkWidget *box, const char *label, GCallback callback) {
     GtkWidget *button = gtk_button_new_with_label(label);
+    gtk_widget_set_size_request(button, -1, 80);
     gtk_box_pack_start(GTK_BOX(box), button, TRUE, TRUE, 0);
     g_signal_connect(button, "clicked", callback, NULL);
     return button;
@@ -1100,20 +1131,58 @@ static GtkWidget *labeled_combo(GtkWidget *row, const char *label_text, GtkWidge
     return combo;
 }
 
+static void menu_undo_cb(GtkWidget *widget, gpointer data) {
+    undo_cb(widget, data);
+    hide_menu();
+}
+
+static void menu_save_cb(GtkWidget *widget, gpointer data) {
+    save_cb(widget, data);
+    hide_menu();
+}
+
+static void menu_load_cb(GtkWidget *widget, gpointer data) {
+    load_cb(widget, data);
+    hide_menu();
+}
+
+static void dismiss_menu_cb(GtkWidget *widget, gpointer data) {
+    (void)widget;
+    (void)data;
+    hide_menu();
+}
+
+static void connect_touch(GtkWidget *widget) {
+    gtk_widget_add_events(widget, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK |
+                                  GDK_POINTER_MOTION_MASK);
+    g_signal_connect(widget, "button-press-event", G_CALLBACK(board_button), NULL);
+    g_signal_connect(widget, "motion-notify-event", G_CALLBACK(board_motion), NULL);
+    g_signal_connect(widget, "button-release-event", G_CALLBACK(board_release), NULL);
+}
+
+static gboolean prepare_data_paths(void) {
+    const char *directory = g_getenv("EXACT_CHINESECHESS_DATA_DIR");
+    if (directory != NULL && directory[0] != '\0') {
+        if (g_mkdir_with_parents(directory, 0700) != 0) {
+            g_printerr("Cannot create data directory: %s\n", directory);
+            return FALSE;
+        }
+        app.save_path = g_build_filename(directory, "game.save", NULL);
+        app.log_path = g_build_filename(directory, "app.log", NULL);
+    } else {
+        app.save_path = g_strdup(SAVE_PATH);
+        app.log_path = g_strdup(LOG_PATH);
+    }
+    return TRUE;
+}
+
 int main(int argc, char **argv) {
-    GtkWidget *vbox;
-    GtkWidget *title;
-    GtkWidget *controls;
-    GtkWidget *settings;
-    GtkWidget *content;
-    GtkWidget *side_panel;
-    GtkWidget *history_frame;
-    GtkWidget *history_scroll;
-    GtkWidget *history_nav;
-    const char *modes[] = { "Play Red", "Play Black", "2 Player", "AI Demo" };
-    const char *levels[] = { "Easy", "Medium", "Hard" };
+    GtkWidget *vbox, *row, *handle, *history_scroll;
+    const char *modes[] = { "我执红", "我执黑", "双人对弈", "自动演示" };
+    const char *levels[] = { "简单", "中等", "困难" };
 
     gtk_init(&argc, &argv);
+    if (!prepare_data_paths()) return 1;
     app_install_kindle_style();
     app.mode = MODE_PLAY_RED;
     app.level = XIANGQI_AI_MEDIUM;
@@ -1121,108 +1190,118 @@ int main(int argc, char **argv) {
     xiangqi_init(&app.game);
     pikafish_uci_init(&app.pikafish,
                       g_getenv("EXACT_CHINESECHESS_PIKAFISH") != NULL ?
-                      g_getenv("EXACT_CHINESECHESS_PIKAFISH") :
-                      DEFAULT_PIKAFISH_PATH);
+                      g_getenv("EXACT_CHINESECHESS_PIKAFISH") : DEFAULT_PIKAFISH_PATH);
     pikafish_uci_set_move_callback(&app.pikafish, pikafish_bestmove_cb, NULL);
     load_assets();
-    set_message("Red to move.");
+    set_message("底边上滑打开菜单");
 
     app.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+    app_apply_high_contrast(app.window);
     gtk_window_set_title(GTK_WINDOW(app.window), kindle_window_title());
     gtk_window_set_default_size(GTK_WINDOW(app.window), KINDLE_APP_WIDTH, KINDLE_APP_HEIGHT);
-    gtk_window_set_resizable(GTK_WINDOW(app.window), TRUE);
-    gtk_container_set_border_width(GTK_CONTAINER(app.window), 8);
+    gtk_container_set_border_width(GTK_CONTAINER(app.window), 0);
     g_signal_connect(app.window, "delete-event", G_CALLBACK(quit_cb), NULL);
-
     vbox = gtk_vbox_new(FALSE, 8);
     gtk_container_add(GTK_CONTAINER(app.window), vbox);
 
-    title = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(title), "<b>Exact Chinese Chess</b>");
-    gtk_box_pack_start(GTK_BOX(vbox), title, FALSE, FALSE, 0);
-
     app.status = gtk_label_new("");
-    gtk_misc_set_alignment(GTK_MISC(app.status), 0.5, 0.5);
+    gtk_widget_set_size_request(app.status, -1, 56);
+    gtk_label_set_ellipsize(GTK_LABEL(app.status), PANGO_ELLIPSIZE_END);
     gtk_box_pack_start(GTK_BOX(vbox), app.status, FALSE, FALSE, 0);
-
-    controls = gtk_hbox_new(TRUE, 8);
-    gtk_box_pack_start(GTK_BOX(vbox), controls, FALSE, FALSE, 0);
-    add_button(controls, "New", G_CALLBACK(new_game_cb));
-    add_button(controls, "Undo", G_CALLBACK(undo_cb));
-    add_button(controls, "Save", G_CALLBACK(save_cb));
-    add_button(controls, "Load", G_CALLBACK(load_cb));
-    add_button(controls, "Quit", G_CALLBACK(quit_cb));
-
-    settings = gtk_hbox_new(FALSE, 12);
-    gtk_box_pack_start(GTK_BOX(vbox), settings, FALSE, FALSE, 0);
-    app.mode_combo = make_combo(modes, 4, app.mode);
-    labeled_combo(settings, "Mode", app.mode_combo);
-    app.level_combo = make_combo(levels, 3, app.level);
-    labeled_combo(settings, "Level", app.level_combo);
-    app.moves_label = gtk_label_new("Moves: 0");
-    gtk_box_pack_start(GTK_BOX(settings), app.moves_label, FALSE, FALSE, 8);
-    app.history_toggle_button = gtk_button_new_with_label("Hide Moves");
-    gtk_box_pack_start(GTK_BOX(settings), app.history_toggle_button, FALSE, FALSE, 0);
-    g_signal_connect(app.history_toggle_button, "clicked", G_CALLBACK(toggle_history_cb), NULL);
-
-    content = gtk_hbox_new(FALSE, 12);
-    gtk_box_pack_start(GTK_BOX(vbox), content, TRUE, TRUE, 0);
-
     app.board = gtk_drawing_area_new();
-    gtk_widget_set_size_request(app.board, 720, 980);
-    gtk_box_pack_start(GTK_BOX(content), app.board, TRUE, TRUE, 0);
-    gtk_widget_add_events(app.board, GDK_BUTTON_PRESS_MASK);
+    gtk_widget_set_size_request(app.board, 240, 240);
+    gtk_box_pack_start(GTK_BOX(vbox), app.board, TRUE, TRUE, 0);
     g_signal_connect(app.board, "expose-event", G_CALLBACK(board_expose), NULL);
-    g_signal_connect(app.board, "button-press-event", G_CALLBACK(board_button), NULL);
+    connect_touch(app.board);
 
-    side_panel = gtk_vbox_new(FALSE, 8);
-    app.history_sidebar = side_panel;
-    app.history_visible = TRUE;
-    gtk_widget_set_size_request(side_panel, 260, 980);
-    gtk_box_pack_start(GTK_BOX(content), side_panel, FALSE, FALSE, 0);
+    app.menu_panel = gtk_vbox_new(FALSE, 8);
+    gtk_box_pack_end(GTK_BOX(vbox), app.menu_panel, FALSE, FALSE, 0);
+    handle = gtk_event_box_new();
+    app_apply_high_contrast(handle);
+    gtk_container_add(GTK_CONTAINER(handle), gtk_label_new("下滑收起"));
+    gtk_widget_set_size_request(handle, -1, 72);
+    gtk_box_pack_start(GTK_BOX(app.menu_panel), handle, FALSE, FALSE, 0);
+    connect_touch(handle);
 
-    history_frame = gtk_frame_new("Moves");
-    gtk_box_pack_start(GTK_BOX(side_panel), history_frame, TRUE, TRUE, 0);
+    app.menu_actions = gtk_vbox_new(FALSE, 8);
+    gtk_box_pack_start(GTK_BOX(app.menu_panel), app.menu_actions, FALSE, FALSE, 0);
+    app.moves_label = gtk_label_new("");
+    gtk_box_pack_start(GTK_BOX(app.menu_actions), app.moves_label, FALSE, FALSE, 0);
+    row = gtk_hbox_new(TRUE, 8);
+    gtk_box_pack_start(GTK_BOX(app.menu_actions), row, FALSE, FALSE, 0);
+    add_button(row, "新局", G_CALLBACK(show_new_game_cb));
+    add_button(row, "悔棋", G_CALLBACK(menu_undo_cb));
+    row = gtk_hbox_new(TRUE, 8);
+    gtk_box_pack_start(GTK_BOX(app.menu_actions), row, FALSE, FALSE, 0);
+    add_button(row, "保存", G_CALLBACK(menu_save_cb));
+    add_button(row, "载入", G_CALLBACK(menu_load_cb));
+    row = gtk_hbox_new(TRUE, 8);
+    gtk_box_pack_start(GTK_BOX(app.menu_actions), row, FALSE, FALSE, 0);
+    add_button(row, "棋谱", G_CALLBACK(show_history_cb));
+    add_button(row, "退出", G_CALLBACK(quit_cb));
+
+    app.new_game_panel = gtk_vbox_new(FALSE, 12);
+    gtk_box_pack_start(GTK_BOX(app.menu_panel), app.new_game_panel, FALSE, FALSE, 0);
+    row = gtk_hbox_new(FALSE, 12);
+    gtk_widget_set_size_request(row, -1, 80);
+    gtk_box_pack_start(GTK_BOX(app.new_game_panel), row, FALSE, FALSE, 0);
+    app.mode_combo = make_combo(modes, 4, app.mode);
+    labeled_combo(row, "执方", app.mode_combo);
+    row = gtk_hbox_new(FALSE, 12);
+    gtk_widget_set_size_request(row, -1, 80);
+    gtk_box_pack_start(GTK_BOX(app.new_game_panel), row, FALSE, FALSE, 0);
+    app.level_combo = make_combo(levels, 3, app.level);
+    labeled_combo(row, "难度", app.level_combo);
+    row = gtk_hbox_new(TRUE, 8);
+    gtk_box_pack_start(GTK_BOX(app.new_game_panel), row, FALSE, FALSE, 0);
+    add_button(row, "返回", G_CALLBACK(menu_back_cb));
+    add_button(row, "开始新局", G_CALLBACK(new_game_cb));
+
+    app.history_sidebar = gtk_vbox_new(FALSE, 8);
+    gtk_box_pack_start(GTK_BOX(app.menu_panel), app.history_sidebar, FALSE, FALSE, 0);
     history_scroll = gtk_scrolled_window_new(NULL, NULL);
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(history_scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-    gtk_container_add(GTK_CONTAINER(history_frame), history_scroll);
+    gtk_widget_set_size_request(history_scroll, -1, 200);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(history_scroll),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_box_pack_start(GTK_BOX(app.history_sidebar), history_scroll, TRUE, TRUE, 0);
     app.history_view = gtk_text_view_new();
     gtk_text_view_set_editable(GTK_TEXT_VIEW(app.history_view), FALSE);
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(app.history_view), FALSE);
-    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(app.history_view), GTK_WRAP_NONE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(app.history_view), GTK_WRAP_WORD_CHAR);
     gtk_container_add(GTK_CONTAINER(history_scroll), app.history_view);
     app_apply_high_contrast(app.history_view);
-
-    history_nav = gtk_hbox_new(FALSE, 4);
-    gtk_box_pack_start(GTK_BOX(side_panel), history_nav, FALSE, FALSE, 0);
-    app.history_first_button = add_history_button(history_nav, "|<", G_CALLBACK(history_first_cb));
-    app.history_prev_button = add_history_button(history_nav, "<", G_CALLBACK(history_prev_cb));
-    app.history_next_button = add_history_button(history_nav, ">", G_CALLBACK(history_next_cb));
-    app.history_latest_button = add_history_button(history_nav, ">|", G_CALLBACK(history_latest_cb));
-
-    g_signal_connect(app.mode_combo, "changed", G_CALLBACK(mode_changed_cb), NULL);
-    g_signal_connect(app.level_combo, "changed", G_CALLBACK(level_changed_cb), NULL);
+    row = gtk_hbox_new(TRUE, 4);
+    gtk_box_pack_start(GTK_BOX(app.history_sidebar), row, FALSE, FALSE, 0);
+    app.history_first_button = add_history_button(row, "最初", G_CALLBACK(history_first_cb));
+    app.history_prev_button = add_history_button(row, "上一步", G_CALLBACK(history_prev_cb));
+    app.history_next_button = add_history_button(row, "下一步", G_CALLBACK(history_next_cb));
+    app.history_latest_button = add_history_button(row, "当前", G_CALLBACK(history_latest_cb));
+    row = gtk_hbox_new(TRUE, 8);
+    gtk_box_pack_start(GTK_BOX(app.history_sidebar), row, FALSE, FALSE, 0);
+    add_button(row, "返回对局", G_CALLBACK(dismiss_menu_cb));
 
     app_log("starting exact-chinesechess");
     {
         GError *error = NULL;
         app.pikafish_available = pikafish_uci_start(&app.pikafish, &error);
-        if (app.pikafish_available) {
-            app_log("Pikafish started");
-        } else {
-            if (error != NULL) {
-                app_log(error->message);
-                g_error_free(error);
-            }
-            app_log("Pikafish unavailable; using embedded AI");
+        if (error != NULL) {
+            app_log(error->message);
+            g_error_free(error);
         }
     }
     update_ui();
+    gtk_widget_show_all(app.menu_panel);
+    gtk_widget_hide(app.new_game_panel);
+    gtk_widget_hide(app.history_sidebar);
+    gtk_widget_hide(app.menu_panel);
+    gtk_widget_set_no_show_all(app.menu_panel, TRUE);
     gtk_widget_show_all(app.window);
     gtk_window_present(GTK_WINDOW(app.window));
     maybe_schedule_ai();
     gtk_main();
     pikafish_uci_clear(&app.pikafish);
     clear_assets();
+    g_free(app.save_path);
+    g_free(app.log_path);
     return 0;
 }

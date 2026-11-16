@@ -1,0 +1,10 @@
+{
+  "manifest_version": 2,
+  "id": "exactchinesechess",
+  "name": "象棋",
+  "author": "jckhng",
+  "description": "支持皮卡鱼的离线象棋，底边上滑打开菜单。",
+  "version": [0, 2, 0],
+  "dependencies": [],
+  "supported_platforms": ["kindlehf"]
+}

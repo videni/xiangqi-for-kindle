@@ -1,59 +1,74 @@
-# Installing On Kindle
+# PW4 5.18：KPM 安装与构建
 
-## Prerequisites
+## 安装
 
-This package targets jailbroken Kindle devices that can run KUAL extensions.
+设备需要已越狱并可运行 KPM，不需要 KUAL。
 
-You need:
+1. 把本次生成的 `xiangqi.kpkg` 复制到 Kindle USB 存储根目录。
+2. 弹出 Kindle，在主页搜索栏输入并执行：
 
-- A jailbroken Kindle.
-- KUAL installed.
-- MRPI installed if your jailbreak/KUAL setup uses MRPI for package installs.
-- USB access to copy the extension package.
+```text
+;kpm install file:///mnt/us/xiangqi.kpkg
+```
+
+3. 安装后打开书库里的“象棋”。也可以在搜索栏执行：
+
+```text
+;kpm launch exactchinesechess
+```
+
+包平台为 `kindlehf`，manifest v2，包含应用、ARM 运行库、Pikafish 和 NNUE。
+本地文件安装语法来自 KPM 的 `file://` install target。较旧的 KPM 如果不识别该语法，先按其官方流程升级 KPM。
+
+## 交互
+
+- 点棋子，再点落点；抬手才处理点击。
+- 从屏幕底边约 120 像素内向上滑至少 96 像素，打开菜单。
+- 下滑菜单顶部的收起区，或点棋盘，收起菜单；本次触摸不走棋。
+- 新局、悔棋、保存、载入、棋谱、退出都在菜单里。
+- 新局设置点“开始新局”才生效；“返回”保留原局。
+- 关闭棋谱后自动回到当前对局。
+
+## 存档与卸载
+
+```text
+/mnt/us/exact-chinesechess/game.save
+/mnt/us/exact-chinesechess/app.log
+/mnt/us/exact-chinesechess/launch.log
+```
+
+升级保留存档；卸载保留该数据目录。卸载命令：
+
+```text
+;kpm uninstall exactchinesechess
+```
+
+旧版存档仍可从 `/mnt/us/extensions/exact-chinesechess/exact-chinesechess.save` 或 `/mnt/us/documents/exact-chinesechess.txt` 载入。
+
+## 构建
+
+在 macOS 开启 OrbStack / Docker。构建器使用 ARMv7 Debian Bullseye；其旧发行包来自 Debian 官方归档源。
+
+```sh
+cd ~/Workspace/exact-chinesechess
+EXACT_CHINESECHESS_PACKAGE=0 bash ~/Workspace/exact-chinesechess/docker_rebuild.sh
+```
+
+下载上游 v0.1.3 的 `exact-chinesechess-extension.zip`，保存为 `~/Workspace/exact-chinesechess/release/upstream-v0.1.3.zip`。打包器会验证 SHA256，然后用本分支新编译的应用替换原应用，保留上游运行库、皮卡鱼、模型和许可证：
+
+```sh
+python3 ~/Workspace/exact-chinesechess/package_kpm.py --extension-zip ~/Workspace/exact-chinesechess/release/upstream-v0.1.3.zip
+```
+
+生成的安装包为 `~/Workspace/exact-chinesechess/release/xiangqi.kpkg`。分发时同时提供本分支完整源码和上游许可证；本次交付会附带 `source.tar.gz`。
+
+## 验证
+
+手势、安装生命周期和引擎测试分别覆盖触摸分类、存档保留、入口所有权、走棋和悔棋。GTK UI 集成测试在 1072×1448 的 Xvfb 中运行真实窗口，覆盖隐藏菜单、滑动不落子、新局取消、棋谱退出和存档往返。
+
+这些检查不代替 PW4 真机验收。设备安装、墨水屏刷新、触控手感、真实 AI 耗时仍需在用户设备上验证。
 
 References:
-
-- Kindle Modding Wiki, jailbreak overview: https://kindlemodding.org/jailbreaking/
-- Kindle Modding Wiki, KUAL and MRPI setup: https://kindlemodding.org/jailbreaking/post-jailbreak/installing-kual-mrpi/
-- MobileRead KUAL thread: https://www.mobileread.com/forums/showthread.php?t=203326
-- MobileRead MRPI wiki: https://wiki.mobileread.com/wiki/MobileRead_Package_Installer
-- MobileRead Kindle 5.x jailbreak notes: https://wiki.mobileread.com/wiki/5_x_Jailbreak
-
-Kindle jailbreak compatibility depends on model and firmware. Follow the
-current guide for your exact device.
-
-## Install
-
-Unzip `release/exact-chinesechess-extension.zip` at the Kindle USB-storage root.
-
-Expected paths:
-
-```text
-/mnt/us/extensions/exact-chinesechess
-/mnt/us/documents/shortcut_exactchinesechess.sh
-```
-
-Fix execute bits over SSH if needed:
-
-```sh
-chmod 755 /mnt/us/extensions/exact-chinesechess/*.sh
-chmod 755 /mnt/us/extensions/exact-chinesechess/bin/armhf/exact-chinesechess
-chmod 755 /mnt/us/documents/shortcut_exactchinesechess.sh
-```
-
-Launch from KUAL:
-
-```text
-KUAL -> Exact Chinese Chess -> Launch
-```
-
-The document shortcut is optional. KUAL is the reliable launch path; a stock
-Kindle home screen normally will not execute `.sh` files unless another script
-launcher/file association is installed.
-
-Logs:
-
-```sh
-tail -n 120 /mnt/us/exact-chinesechess.log
-tail -n 120 /mnt/us/exact-chinesechess-shortcut.log
-```
+- https://kindlemodding.org/kindle-dev/kpm/creating-a-package.html
+- https://github.com/KindleModding/KPM/blob/main/src/install.c
+- https://github.com/jckhng/exact-chinesechess/releases/tag/v0.1.3

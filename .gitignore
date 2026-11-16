@@ -1,6 +1,8 @@
 # Native build outputs
 /exact-chinesechess
 /smoke-test
+/touch-test
+/ui-test
 *.o
 /_pikafish_build/
 /_pikafish_verify_out/
@@ -17,4 +19,5 @@
 # Editor/OS noise
 *~
 .DS_Store
+__pycache__/
 * - Copy.png
